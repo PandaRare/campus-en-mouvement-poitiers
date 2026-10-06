@@ -1,21 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MapContainer, TileLayer, Marker, Circle, Popup } from 'react-leaflet'
-import L from 'leaflet'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
-import { Search, X, ChevronRight, Users } from 'lucide-react'
+import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import AddressInput from '../components/AddressInput'
+import RidesMap from '../components/RidesMap'
+import { CAMPUS, distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
 
-// Correctif des icônes Leaflet avec un bundler
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerIcon2x,
-  shadowUrl: markerShadow,
-})
-
-const CAMPUS = [46.58, 0.34]
+const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'short',
@@ -25,7 +16,16 @@ const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   minute: '2-digit',
 })
 
-const emptyForm = { origin: '', destination: '', time: '', seats: 2 }
+const emptyForm = {
+  origin: '',
+  originPlace: null,
+  destination: '',
+  destPlace: null,
+  meeting: '',
+  meetingPlace: null,
+  time: '',
+  seats: 2,
+}
 
 // Comparaison insensible à la casse et aux accents
 const normalize = (value) =>
@@ -38,11 +38,15 @@ const normalize = (value) =>
 export default function Carpooling({ session }) {
   const [rides, setRides] = useState([])
   const [query, setQuery] = useState('')
+  const [point, setPoint] = useState(null) // lieu cherché { label, lat, lng }
+  const [radius, setRadius] = useState(1000)
+  const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [showForm, setShowForm] = useState(false)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const mapRef = useRef(null)
 
   const userId = session.user.id
 
@@ -67,17 +71,54 @@ export default function Carpooling({ session }) {
     return () => supabase.removeChannel(channel)
   }, [loadRides])
 
+  function locateMe() {
+    if (!navigator.geolocation) {
+      setError('La géolocalisation n’est pas disponible sur cet appareil.')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setError(null)
+        setPoint({ label: 'Ma position', lat: pos.coords.latitude, lng: pos.coords.longitude })
+        setQuery('Ma position')
+      },
+      () => setError('Position introuvable : vérifiez l’autorisation de localisation du navigateur.'),
+      { enableHighAccuracy: true, timeout: 10000 },
+    )
+  }
+
   async function publishRide(e) {
     e.preventDefault()
-    setBusy(true)
     setError(null)
+
+    if (!form.originPlace || !form.destPlace) {
+      setError('Choisissez le départ et l’arrivée dans la liste de suggestions pour les placer sur la carte.')
+      return
+    }
+    if (form.meeting.trim() && !form.meetingPlace) {
+      setError('Choisissez le point de rendez-vous dans la liste de suggestions, ou videz le champ.')
+      return
+    }
+
+    setBusy(true)
+    const { originPlace: o, destPlace: d, meetingPlace: m } = form
+    const { route, distance_m } = await fetchRoute([o.lat, o.lng], [d.lat, d.lng])
 
     const { error } = await supabase.from('rides').insert({
       driver_id: userId,
-      origin: form.origin.trim(),
-      destination: form.destination.trim(),
+      origin: o.label,
+      destination: d.label,
       time: new Date(form.time).toISOString(),
       seats: Number(form.seats),
+      origin_lat: o.lat,
+      origin_lng: o.lng,
+      dest_lat: d.lat,
+      dest_lng: d.lng,
+      meeting_label: m ? m.label : null,
+      meeting_lat: m ? m.lat : null,
+      meeting_lng: m ? m.lng : null,
+      route,
+      distance_m,
     })
 
     if (error) {
@@ -90,16 +131,36 @@ export default function Carpooling({ session }) {
   }
 
   const minDateTime = useMemo(() => new Date().toISOString().slice(0, 16), [])
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+  const setField = (key) => (value) => setForm((f) => ({ ...f, [key]: value }))
 
-  const filtered = useMemo(() => {
+  const pt = useMemo(() => (point ? [point.lat, point.lng] : null), [point])
+
+  // Mode « adresse » : trajets dont le tracé passe à moins de `radius` mètres du point.
+  // Mode « texte » : filtre sur les noms de départ / arrivée.
+  const results = useMemo(() => {
+    if (pt) {
+      return rides
+        .map((ride) => ({
+          ...ride,
+          near: hasRoute(ride) ? distanceToRoute(pt, ride.route) : Infinity,
+        }))
+        .filter((ride) => ride.near <= radius)
+    }
     const q = normalize(query)
     if (!q) return rides
     return rides.filter(
       (ride) =>
         normalize(ride.origin).includes(q) || normalize(ride.destination).includes(q),
     )
-  }, [rides, query])
+  }, [rides, pt, radius, query])
+
+  const mapRides = useMemo(() => results.filter(hasRoute), [results])
+  const selected = results.find((ride) => ride.id === selectedId) ?? null
+
+  function showOnMap(id) {
+    setSelectedId(id)
+    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
@@ -108,40 +169,115 @@ export default function Carpooling({ session }) {
         <p className="text-pine-700 text-sm">{session.user.email}</p>
       </header>
 
-      <div className="relative mb-5">
-        <Search
-          size={18}
-          className="text-pine-500 pointer-events-none absolute top-1/2 left-4 -translate-y-1/2"
-        />
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Rechercher une ville de départ ou d'arrivée"
-          className="border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white py-3 pr-11 pl-11 text-base outline-none"
-        />
-        {query && (
-          <button
-            type="button"
-            onClick={() => setQuery('')}
-            aria-label="Effacer la recherche"
-            className="text-pine-500 absolute top-1/2 right-3 -translate-y-1/2 p-1"
-          >
-            <X size={18} />
-          </button>
-        )}
+      <div className="mb-2 flex gap-2">
+        <div className="min-w-0 flex-1">
+          <AddressInput
+            value={query}
+            onChange={setQuery}
+            selected={point}
+            onSelect={setPoint}
+            LeftIcon={Search}
+            ariaLabel="Rechercher une adresse ou une ville"
+            placeholder="Ville, adresse, lieu…"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={locateMe}
+          aria-label="Utiliser ma position"
+          className="border-pine-100 text-pine-700 shrink-0 rounded-xl border bg-white px-3.5"
+        >
+          <LocateFixed size={20} />
+        </button>
       </div>
 
-      <MapContainer center={CAMPUS} zoom={14} scrollWheelZoom={false} className="mb-6">
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="&copy; OpenStreetMap"
+      {point ? (
+        <div className="mb-4">
+          <p className="text-pine-700 mb-2 text-sm">
+            Trajets qui passent près de <strong>{point.label}</strong>
+          </p>
+          <div className="flex gap-2">
+            {RADIUS_OPTIONS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRadius(r)}
+                className={`rounded-full border px-3 py-1 text-sm ${
+                  radius === r
+                    ? 'bg-pine-900 border-pine-900 text-white'
+                    : 'border-pine-100 text-pine-700 bg-white'
+                }`}
+              >
+                {r < 1000 ? `${r} m` : `${r / 1000} km`}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="text-pine-500 mb-4 text-xs">
+          Choisissez une adresse dans les suggestions pour voir les trajets qui passent près de
+          vous, ou tapez une ville pour filtrer la liste.
+        </p>
+      )}
+
+      <div ref={mapRef} className="mb-3 scroll-mt-4">
+        <RidesMap
+          rides={mapRides}
+          selectedId={selected?.id ?? null}
+          onSelect={setSelectedId}
+          point={pt}
+          radius={point ? radius : null}
+          height={300}
         />
-        <Circle center={CAMPUS} radius={700} pathOptions={{ color: '#2f7d63', weight: 1 }} />
-        <Marker position={CAMPUS}>
-          <Popup>Campus — point de rendez-vous</Popup>
-        </Marker>
-      </MapContainer>
+      </div>
+
+      {selected ? (
+        <section className="border-pine-100 mb-6 rounded-2xl border bg-white p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-medium">
+                {selected.origin} → {selected.destination}
+              </p>
+              <p className="text-pine-700 mt-1 text-sm">
+                {dateFormat.format(new Date(selected.time))} · {selected.seats} place
+                {selected.seats > 1 ? 's' : ''}
+                {selected.distance_m ? ` · ${formatDistance(selected.distance_m)}` : ''}
+              </p>
+              {selected.near != null && selected.near !== Infinity && (
+                <p className="text-pine-500 mt-1 text-xs">
+                  Passe à {formatDistance(selected.near)} de {point.label}
+                </p>
+              )}
+              {selected.meeting_label && (
+                <p className="text-pine-700 mt-1 flex items-start gap-1 text-sm">
+                  <Flag size={14} className="text-pine-500 mt-0.5 shrink-0" />
+                  RDV : {selected.meeting_label}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedId(null)}
+              aria-label="Fermer"
+              className="text-pine-500 p-1"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <Link
+            to={`/trajets/${selected.id}`}
+            className="bg-pine-900 mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-3 font-medium text-white"
+          >
+            <Navigation size={16} /> Voir le trajet
+          </Link>
+        </section>
+      ) : (
+        mapRides.length > 0 && (
+          <p className="text-pine-500 mb-6 text-center text-xs">
+            Touchez un trajet sur la carte pour voir ses détails.
+          </p>
+        )
+      )}
 
       <section className="border-pine-100 mb-6 rounded-2xl border bg-white p-4">
         <button
@@ -159,19 +295,34 @@ export default function Carpooling({ session }) {
 
         {showForm && (
           <form onSubmit={publishRide} className="mt-4 space-y-3">
-            <input
+            <AddressInput
               required
               value={form.origin}
-              onChange={set('origin')}
+              onChange={setField('origin')}
+              selected={form.originPlace}
+              onSelect={setField('originPlace')}
+              shortcuts={[CAMPUS]}
+              ariaLabel="Départ"
               placeholder="Départ (ex. Gare de Poitiers)"
-              className="border-pine-100 focus:border-pine-500 w-full rounded-xl border px-4 py-3 outline-none"
             />
-            <input
+            <AddressInput
               required
               value={form.destination}
-              onChange={set('destination')}
+              onChange={setField('destination')}
+              selected={form.destPlace}
+              onSelect={setField('destPlace')}
+              shortcuts={[CAMPUS]}
+              ariaLabel="Arrivée"
               placeholder="Arrivée (ex. Campus)"
-              className="border-pine-100 focus:border-pine-500 w-full rounded-xl border px-4 py-3 outline-none"
+            />
+            <AddressInput
+              value={form.meeting}
+              onChange={setField('meeting')}
+              selected={form.meetingPlace}
+              onSelect={setField('meetingPlace')}
+              LeftIcon={Flag}
+              ariaLabel="Point de rendez-vous"
+              placeholder="Point de rendez-vous (optionnel)"
             />
             <div className="flex gap-3">
               <input
@@ -179,12 +330,12 @@ export default function Carpooling({ session }) {
                 type="datetime-local"
                 min={minDateTime}
                 value={form.time}
-                onChange={set('time')}
+                onChange={(e) => setField('time')(e.target.value)}
                 className="border-pine-100 focus:border-pine-500 w-full rounded-xl border px-3 py-3 outline-none"
               />
               <select
                 value={form.seats}
-                onChange={set('seats')}
+                onChange={(e) => setField('seats')(e.target.value)}
                 className="border-pine-100 focus:border-pine-500 rounded-xl border px-3 py-3 outline-none"
                 aria-label="Places disponibles"
               >
@@ -200,7 +351,7 @@ export default function Carpooling({ session }) {
               disabled={busy}
               className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
             >
-              {busy ? 'Publication…' : 'Publier le trajet'}
+              {busy ? 'Calcul du trajet…' : 'Publier le trajet'}
             </button>
           </form>
         )}
@@ -213,25 +364,32 @@ export default function Carpooling({ session }) {
       <section>
         <h2 className="mb-3 font-medium">
           À venir{' '}
-          {!loading && <span className="text-pine-500">({filtered.length})</span>}
+          {!loading && <span className="text-pine-500">({results.length})</span>}
         </h2>
 
         {loading && <p className="text-pine-700 text-sm">Chargement des trajets…</p>}
 
-        {!loading && filtered.length === 0 && (
+        {!loading && results.length === 0 && (
           <p className="border-pine-100 text-pine-700 rounded-2xl border border-dashed p-6 text-center text-sm">
-            {query
-              ? `Aucun trajet ne correspond à « ${query} ». Essayez une autre ville.`
-              : 'Aucun trajet pour le moment. Publiez le premier.'}
+            {point
+              ? `Aucun trajet ne passe à moins de ${radius < 1000 ? `${radius} m` : `${radius / 1000} km`} de cette adresse. Élargissez le rayon.`
+              : query
+                ? `Aucun trajet ne correspond à « ${query} ». Essayez une autre ville.`
+                : 'Aucun trajet pour le moment. Publiez le premier.'}
           </p>
         )}
 
         <ul className="space-y-3">
-          {filtered.map((ride) => (
-            <li key={ride.id}>
+          {results.map((ride) => (
+            <li
+              key={ride.id}
+              className={`flex items-stretch rounded-2xl border bg-white ${
+                ride.id === selected?.id ? 'border-pine-500' : 'border-pine-100'
+              }`}
+            >
               <Link
                 to={`/trajets/${ride.id}`}
-                className="border-pine-100 active:bg-pine-50 flex items-center gap-3 rounded-2xl border bg-white p-4"
+                className="active:bg-pine-50 flex min-w-0 flex-1 items-center gap-3 rounded-l-2xl p-4"
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">
@@ -239,6 +397,9 @@ export default function Carpooling({ session }) {
                   </p>
                   <p className="text-pine-700 mt-1 text-sm">
                     {dateFormat.format(new Date(ride.time))}
+                    {ride.near != null && ride.near !== Infinity && (
+                      <span className="text-pine-500"> · à {formatDistance(ride.near)}</span>
+                    )}
                   </p>
                   {ride.driver_id === userId && (
                     <p className="text-pine-500 mt-1 text-xs">Vous conduisez ce trajet</p>
@@ -248,8 +409,19 @@ export default function Carpooling({ session }) {
                   <Users size={14} />
                   {ride.seats}
                 </span>
-                <ChevronRight size={18} className="text-pine-500 shrink-0" />
               </Link>
+              {hasRoute(ride) ? (
+                <button
+                  type="button"
+                  onClick={() => showOnMap(ride.id)}
+                  aria-label="Voir sur la carte"
+                  className="text-pine-500 border-pine-100 active:bg-pine-50 shrink-0 rounded-r-2xl border-l px-3.5"
+                >
+                  <MapPin size={18} />
+                </button>
+              ) : (
+                <span className="px-2" />
+              )}
             </li>
           ))}
         </ul>

@@ -26,6 +26,14 @@ body {
 }
 
 .leaflet-container {
-  @apply h-56 w-full rounded-2xl;
+  @apply w-full rounded-2xl;
   z-index: 0;
+  font-family: inherit;
+}
+
+.leaflet-tooltip.pin-tip {
+  @apply text-pine-900 rounded-lg border-0 px-2 py-0.5 text-xs font-medium shadow;
+}
+.leaflet-tooltip.pin-tip::before {
+  display: none;
 }

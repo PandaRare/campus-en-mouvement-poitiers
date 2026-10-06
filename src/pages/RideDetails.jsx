@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Users, Clock, MapPin, Send, LogOut } from 'lucide-react'
+import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import RidesMap from '../components/RidesMap'
+import { formatDistance, hasRoute } from '../lib/geo'
+import { DEFAULT_VEHICLE, VEHICLES, formatKg, tripSavings } from '../lib/co2'
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'long',
@@ -26,6 +29,7 @@ export default function RideDetails({ session }) {
   const [reservations, setReservations] = useState([])
   const [messages, setMessages] = useState([])
   const [draft, setDraft] = useState('')
+  const [driverProfile, setDriverProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -96,6 +100,24 @@ export default function RideDetails({ session }) {
 
     return () => supabase.removeChannel(channel)
   }, [id, loadRide, loadReservations])
+
+  // Profil du conducteur (prénom + formation)
+  useEffect(() => {
+    const driverId = ride?.driver_id
+    if (!driverId) return
+    let active = true
+    supabase
+      .from('profiles')
+      .select('full_name, study')
+      .eq('id', driverId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (active) setDriverProfile(data)
+      })
+    return () => {
+      active = false
+    }
+  }, [ride?.driver_id])
 
   // Défilement automatique du chat
   useEffect(() => {
@@ -179,6 +201,18 @@ export default function RideDetails({ session }) {
 
   const isPast = new Date(ride.time) < new Date()
 
+  // Estimation du CO₂ économisé par personne (véhicule moyen « essence » par défaut)
+  const factor = VEHICLES.find((v) => v.id === DEFAULT_VEHICLE).factor
+  const passengersForEstimate = reservations.length + (isMember ? 0 : 1)
+  const ecoSaving =
+    ride.distance_m && passengersForEstimate > 0
+      ? tripSavings({
+          distanceKm: ride.distance_m / 1000,
+          factor,
+          passengers: passengersForEstimate,
+        }).savedPerPerson
+      : null
+
   return (
     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
       <button
@@ -208,10 +242,36 @@ export default function RideDetails({ session }) {
             {ride.seats > 1 ? 's' : ''}
             {isDriver && ` · ${reservations.length} passager${reservations.length > 1 ? 's' : ''}`}
           </li>
+          {ride.meeting_label && (
+            <li className="flex items-start gap-2">
+              <Flag size={16} className="text-pine-500 mt-0.5 shrink-0" />
+              Rendez-vous : {ride.meeting_label}
+            </li>
+          )}
+          {ecoSaving && (
+            <li className="flex items-start gap-2">
+              <Leaf size={16} className="text-pine-500 mt-0.5 shrink-0" />
+              <span>
+                {formatDistance(ride.distance_m)} · ≈ {formatKg(ecoSaving)} de CO₂ économisés
+                {isMember ? ' par personne' : ' si vous rejoignez ce trajet'}
+              </span>
+            </li>
+          )}
         </ul>
 
+        {hasRoute(ride) && (
+          <div className="mt-4 overflow-hidden rounded-2xl">
+            <RidesMap rides={[ride]} selectedId={ride.id} height={220} />
+          </div>
+        )}
+
         <p className="text-pine-500 mt-4 text-xs">
-          {isDriver ? 'Vous êtes le conducteur' : `Conducteur ${ride.driver_id.slice(0, 4)}`}
+          {isDriver
+            ? 'Vous êtes le conducteur'
+            : `Conducteur : ${
+                [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
+                ride.driver_id.slice(0, 4)
+              }`}
         </p>
 
         <div className="mt-5">

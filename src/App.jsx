@@ -5,64 +5,22 @@ import {
   Route,
   Navigate,
   NavLink,
-  useNavigate,
 } from 'react-router-dom'
-import { Search, Route as RouteIcon, User } from 'lucide-react'
+import { Search, Route as RouteIcon, Leaf, User } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import Auth from './pages/Auth'
 import Carpooling from './pages/Carpooling'
 import RideDetails from './pages/RideDetails'
 import MyRides from './pages/MyRides'
+import Co2 from './pages/Co2'
+import Account from './pages/Account'
 
 const NAV = [
   { to: '/trajets', label: 'Accueil', Icon: Search },
   { to: '/mes-trajets', label: 'Mes trajets', Icon: RouteIcon },
+  { to: '/co2', label: 'CO₂', Icon: Leaf },
   { to: '/compte', label: 'Compte', Icon: User },
 ]
-
-function Account({ session }) {
-  const navigate = useNavigate()
-  const [busy, setBusy] = useState(false)
-
-  async function signOut() {
-    setBusy(true)
-    await supabase.auth.signOut()
-    setBusy(false)
-    navigate('/trajets', { replace: true })
-  }
-
-  return (
-    <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
-      <h1 className="text-2xl font-semibold">Mon compte</h1>
-      <p className="text-pine-700 mt-1 text-sm">{session.user.email}</p>
-
-      <dl className="border-pine-100 divide-pine-100 mt-6 divide-y rounded-2xl border bg-white px-4">
-        <div className="flex items-center justify-between py-3">
-          <dt className="text-pine-700 text-sm">Membre depuis</dt>
-          <dd className="text-sm">
-            {new Intl.DateTimeFormat('fr-FR', {
-              day: 'numeric',
-              month: 'long',
-              year: 'numeric',
-            }).format(new Date(session.user.created_at))}
-          </dd>
-        </div>
-        <div className="flex items-center justify-between py-3">
-          <dt className="text-pine-700 text-sm">Identifiant</dt>
-          <dd className="font-mono text-xs">{session.user.id.slice(0, 8)}</dd>
-        </div>
-      </dl>
-
-      <button
-        onClick={signOut}
-        disabled={busy}
-        className="border-pine-100 mt-6 w-full rounded-xl border bg-white py-3.5 font-medium disabled:opacity-50"
-      >
-        {busy ? 'Déconnexion…' : 'Me déconnecter'}
-      </button>
-    </main>
-  )
-}
 
 function BottomNav() {
   return (
@@ -120,6 +78,7 @@ export default function App() {
         <Route path="/trajets" element={<Carpooling session={session} />} />
         <Route path="/trajets/:id" element={<RideDetails session={session} />} />
         <Route path="/mes-trajets" element={<MyRides session={session} />} />
+        <Route path="/co2" element={<Co2 session={session} />} />
         <Route path="/compte" element={<Account session={session} />} />
         <Route path="*" element={<Navigate to="/trajets" replace />} />
       </Routes>
