@@ -4,8 +4,8 @@ import L from 'leaflet'
 import { CAMPUS } from '../lib/geo'
 
 // Fond de carte CARTO « Voyager » (données © OpenStreetMap) : plus lisible que le fond OSM standard
-const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-const ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+const ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
 const dot = (color, size = 18) =>
   L.divIcon({
