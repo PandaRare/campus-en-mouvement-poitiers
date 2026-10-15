@@ -14,7 +14,7 @@ import RideDetails from './pages/RideDetails'
 import MyRides from './pages/MyRides'
 import Co2 from './pages/Co2'
 import Account from './pages/Account'
-import InstallPrompt from './InstallPrompt'
+import InstallPrompt from './components/InstallPrompt'
 
 const NAV = [
   { to: '/trajets', label: 'Accueil', Icon: Search },
