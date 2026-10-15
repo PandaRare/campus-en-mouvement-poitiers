@@ -84,7 +84,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/trajets" replace />} />
       </Routes>
       <BottomNav />
-      <InstallPrompt />
+      <InstallPrompt withNav />
     </BrowserRouter>
   )
 }
