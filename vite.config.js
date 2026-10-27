@@ -26,24 +26,19 @@ export default defineConfig({
         ],
       },
       workbox: {
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/[a-d]\.basemaps\.cartocdn\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'carto-tiles',
-              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 14 },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/[a-z]\.tile\.openstreetmap\.org\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'osm-tiles',
-              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 14 },
-            },
-          },
-        ],
+// Dans vite.config.js sous workbox :
+runtimeCaching: [
+  {
+    urlPattern: /^https:\/\/.*\.supabase\.co\/rest\/v1\/.*/i,
+    handler: 'NetworkFirst',
+    options: { cacheName: 'supabase-cache' }
+  },
+  {
+    urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+    handler: 'CacheFirst',
+    options: { cacheName: 'map-tiles-cache' }
+  }
+]
       },
     }),
   ],
