@@ -1,16 +1,25 @@
-# React + Vite
+# Campus en Mouvement — Poitiers
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+PWA de covoiturage entre étudiants de l'Université de Poitiers.
+React + Vite · Tailwind CSS 4 · Supabase (Auth, Postgres, Realtime, Edge Functions) · React-Leaflet · TanStack Query.
 
-Currently, two official plugins are available:
+## Démarrer
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+cp .env.example .env.local     # puis renseigner les valeurs
+npm run dev
+```
 
-## React Compiler
+Base de données : exécuter dans l'ordre `supabase_schema.sql`, `supabase_schema_v2.sql` (réservations, messages),
+`supabase_migration_v2.sql`, puis `supabase_migration_v3.sql` (voir `docs/INTEGRATION_V3.md`).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Test PWA / hors-ligne / notifications (le service worker ne tourne qu'en build) :
 
-## Expanding the ESLint configuration
+```bash
+npm run build && npm run preview
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Documentation
+
+- `docs/INTEGRATION_V3.md` — mise en place de la v3, étape par étape

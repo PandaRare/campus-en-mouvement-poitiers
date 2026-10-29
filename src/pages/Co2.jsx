@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Leaf, TreePine } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { useCo2Rides } from '../lib/queries'
 import {
   VEHICLES,
   DEFAULT_VEHICLE,
@@ -31,8 +31,8 @@ const treesLabel = (kg) => {
 export default function Co2({ session }) {
   const userId = session.user.id
   const [vehicle, setVehicle] = useState(readVehicle)
-  const [rides, setRides] = useState(null) // null = chargement
-  const [error, setError] = useState(null)
+  const { data: rides, error: loadError } = useCo2Rides(userId) // undefined = chargement
+  const error = loadError?.message ?? null
   const [sim, setSim] = useState({ distance: '10', people: 2, perWeek: 4, weeks: 30, roundTrip: true })
 
   const factor = VEHICLES.find((v) => v.id === vehicle)?.factor ?? 0.2
@@ -46,40 +46,7 @@ export default function Co2({ session }) {
     }
   }
 
-  // --- Bilan réel : trajets conduits + trajets rejoints -------------------
-  useEffect(() => {
-    let active = true
-    Promise.all([
-      supabase
-        .from('rides')
-        .select('id, time, distance_m, reservations(count)')
-        .eq('driver_id', userId),
-      supabase
-        .from('reservations')
-        .select('id, rides (id, time, distance_m, reservations(count))')
-        .eq('user_id', userId),
-    ]).then(([driven, booked]) => {
-      if (!active) return
-      if (driven.error || booked.error) {
-        setError((driven.error ?? booked.error).message)
-        setRides([])
-        return
-      }
-      const normalize = (r) => ({
-        id: r.id,
-        time: r.time,
-        distance_m: r.distance_m,
-        passengers: r.reservations?.[0]?.count ?? 0,
-      })
-      setRides([
-        ...(driven.data ?? []).map(normalize),
-        ...(booked.data ?? []).map((row) => row.rides).filter(Boolean).map(normalize),
-      ])
-    })
-    return () => {
-      active = false
-    }
-  }, [userId])
+  // --- Bilan réel : trajets conduits + trajets rejoints (useCo2Rides) ---
 
   const stats = useMemo(() => {
     const now = new Date()
@@ -150,7 +117,7 @@ export default function Co2({ session }) {
         <p className="flex items-center gap-2 text-sm opacity-80">
           <Leaf size={16} /> Mon bilan
         </p>
-        {rides === null ? (
+        {rides === undefined && !error ? (
           <p className="mt-3 text-sm">Chargement…</p>
         ) : (
           <>

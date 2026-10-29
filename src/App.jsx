@@ -15,6 +15,18 @@ import MyRides from './pages/MyRides'
 import Co2 from './pages/Co2'
 import Account from './pages/Account'
 import InstallPrompt from './components/InstallPrompt'
+import { queryClient } from './lib/queryClient'
+import { useRealtimeSync } from './lib/queries'
+
+// Vide tout ce qui appartient à l'utilisateur sorti : cache mémoire + cache hors-ligne du service worker
+function clearUserCaches() {
+  queryClient.clear()
+  try {
+    caches.delete('supabase-cache')
+  } catch {
+    /* Cache API indisponible : sans conséquence */
+  }
+}
 
 const NAV = [
   { to: '/trajets', label: 'Accueil', Icon: Search },
@@ -61,9 +73,15 @@ export default function App() {
       setSession(data.session)
       setReady(true)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next))
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'SIGNED_OUT') clearUserCaches()
+      setSession(next)
+    })
     return () => sub.subscription.unsubscribe()
   }, [])
+
+  // Un seul canal temps réel (trajets, réservations, messages) tant qu'on est connecté
+  useRealtimeSync(Boolean(session))
 
   if (!ready) {
     return <p className="text-pine-700 p-8 text-sm">Chargement…</p>

@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+// Même règle que le trigger SQL enforce_univ_email (le serveur reste l'arbitre final)
+const UNIV_EMAIL = /^[^@\s]+@(etu\.)?univ-poitiers\.fr$/i
+const UNIV_ERROR =
+  'L’inscription est réservée aux adresses @etu.univ-poitiers.fr et @univ-poitiers.fr.'
+
 export default function Auth() {
   const [mode, setMode] = useState('login') // 'login' | 'signup'
   const [email, setEmail] = useState('')
@@ -12,12 +17,18 @@ export default function Auth() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    setBusy(true)
     setMessage(null)
+
+    if (isSignup && !UNIV_EMAIL.test(email.trim())) {
+      setMessage({ type: 'error', text: UNIV_ERROR })
+      return
+    }
+
+    setBusy(true)
 
     const { error } = isSignup
       ? await supabase.auth.signUp({
-          email,
+          email: email.trim(),
           password,
           options: {
             emailRedirectTo: `${window.location.origin}/`,
@@ -26,7 +37,9 @@ export default function Auth() {
       : await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
-      setMessage({ type: 'error', text: error.message })
+      // Le trigger SQL refuse les autres domaines ; Supabase ne remonte alors qu'une erreur générique
+      const refused = /database error saving new user/i.test(error.message)
+      setMessage({ type: 'error', text: refused ? UNIV_ERROR : error.message })
     } else if (isSignup) {
       setMessage({
         type: 'ok',
@@ -58,7 +71,7 @@ export default function Auth() {
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="prenom.nom@univ.fr"
+            placeholder="prenom.nom@etu.univ-poitiers.fr"
             className="border-pine-100 focus:border-pine-500 mt-1 w-full rounded-xl border bg-white px-4 py-3 text-base outline-none"
           />
         </label>

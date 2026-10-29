@@ -26,19 +26,33 @@ export default defineConfig({
         ],
       },
       workbox: {
-// Dans vite.config.js sous workbox :
-runtimeCaching: [
-  {
-    urlPattern: /^https:\/\/.*\.supabase\.co\/rest\/v1\/.*/i,
-    handler: 'NetworkFirst',
-    options: { cacheName: 'supabase-cache' }
-  },
-  {
-    urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
-    handler: 'CacheFirst',
-    options: { cacheName: 'map-tiles-cache' }
-  }
-]
+        // Notifications push : public/push-sw.js est chargé dans le service worker généré
+        importScripts: ['push-sw.js'],
+        cleanupOutdatedCaches: true,
+        runtimeCaching: [
+          {
+            // Lecture hors-ligne des données personnelles : trajets, réservations, messages, profils.
+            // NetworkFirst : réseau d'abord (données fraîches), cache si le réseau échoue ou dépasse 4 s.
+            // Seules les requêtes GET sont mises en cache (les écritures et RPC ne le sont jamais).
+            // Ce cache est vidé à la déconnexion (voir App.jsx).
+            urlPattern: /^https:\/\/[^/]+\.supabase\.co\/rest\/v1\/(rides|reservations|messages|profiles)(\?|\/|$)/i,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'supabase-cache',
+              networkTimeoutSeconds: 4,
+              expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'map-tiles-cache',
+              expiration: { maxEntries: 150 },
+            },
+          },
+        ],
       },
     }),
   ],

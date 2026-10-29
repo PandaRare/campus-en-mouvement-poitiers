@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation, Repeat } from 'lucide-react'
 import AddressInput from '../components/AddressInput'
+import OfflineNotice from '../components/OfflineNotice'
+import RecurrenceFields from '../components/RecurrenceFields'
 import RidesMap from '../components/RidesMap'
-import { CAMPUS, distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
+import { HUB_PLACES } from '../constants/poitiersHubs'
+import { MAX_RECURRENCE_DAYS, addDays, emptyRecurrence } from '../lib/recurrence'
+import { distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
+import { useCreateRecurringRides, useCreateRide, useUpcomingRides } from '../lib/queries'
 
 const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
+const NO_RIDES = []
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'short',
@@ -31,45 +36,33 @@ const emptyForm = {
 const normalize = (value) =>
   value
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .trim()
 
+// Heure LOCALE pour <input type="datetime-local" min=…> (toISOString donnerait l'heure UTC)
+const localNowForInput = () =>
+  new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+
 export default function Carpooling({ session }) {
-  const [rides, setRides] = useState([])
+  const { data: rides = NO_RIDES, isPending: loading, error: loadError } = useUpcomingRides()
+  const createRide = useCreateRide()
+  const createRecurring = useCreateRecurringRides()
+
   const [query, setQuery] = useState('')
   const [point, setPoint] = useState(null) // lieu cherché { label, lat, lng }
   const [radius, setRadius] = useState(1000)
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(emptyForm)
+  const [recurrence, setRecurrence] = useState(emptyRecurrence)
   const [showForm, setShowForm] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [minDateTime] = useState(localNowForInput)
   const mapRef = useRef(null)
 
   const userId = session.user.id
-
-  const loadRides = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('rides')
-      .select('*')
-      .gte('time', new Date().toISOString())
-      .order('time', { ascending: true })
-
-    if (error) setError(error.message)
-    else setRides(data ?? [])
-    setLoading(false)
-  }, [])
-
-  useEffect(() => {
-    loadRides()
-    const channel = supabase
-      .channel('rides-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, loadRides)
-      .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [loadRides])
 
   function locateMe() {
     if (!navigator.geolocation) {
@@ -90,6 +83,7 @@ export default function Carpooling({ session }) {
   async function publishRide(e) {
     e.preventDefault()
     setError(null)
+    setNotice(null)
 
     if (!form.originPlace || !form.destPlace) {
       setError('Choisissez le départ et l’arrivée dans la liste de suggestions pour les placer sur la carte.')
@@ -100,37 +94,81 @@ export default function Carpooling({ session }) {
       return
     }
 
+    const [startDate, timeOfDay] = form.time.split('T') // « AAAA-MM-JJ », « HH:MM »
+    if (recurrence.enabled) {
+      if (recurrence.days.length === 0) {
+        setError('Choisissez au moins un jour de la semaine pour la répétition.')
+        return
+      }
+      if (!recurrence.endDate || recurrence.endDate < startDate) {
+        setError('La date de fin de répétition doit être le jour du premier trajet ou après.')
+        return
+      }
+      if (recurrence.endDate > addDays(startDate, MAX_RECURRENCE_DAYS)) {
+        setError('La répétition est limitée à 6 mois.')
+        return
+      }
+    }
+
     setBusy(true)
     const { originPlace: o, destPlace: d, meetingPlace: m } = form
-    const { route, distance_m } = await fetchRoute([o.lat, o.lng], [d.lat, d.lng])
 
-    const { error } = await supabase.from('rides').insert({
-      driver_id: userId,
-      origin: o.label,
-      destination: d.label,
-      time: new Date(form.time).toISOString(),
-      seats: Number(form.seats),
-      origin_lat: o.lat,
-      origin_lng: o.lng,
-      dest_lat: d.lat,
-      dest_lng: d.lng,
-      meeting_label: m ? m.label : null,
-      meeting_lat: m ? m.lat : null,
-      meeting_lng: m ? m.lng : null,
-      route,
-      distance_m,
-    })
+    try {
+      const { route, distance_m } = await fetchRoute([o.lat, o.lng], [d.lat, d.lng])
 
-    if (error) {
-      setError(error.message)
-    } else {
+      if (recurrence.enabled) {
+        const count = await createRecurring.mutateAsync({
+          p_origin: o.label,
+          p_destination: d.label,
+          p_origin_lat: o.lat,
+          p_origin_lng: o.lng,
+          p_dest_lat: d.lat,
+          p_dest_lng: d.lng,
+          p_meeting_label: m ? m.label : null,
+          p_meeting_lat: m ? m.lat : null,
+          p_meeting_lng: m ? m.lng : null,
+          p_start_date: startDate,
+          p_end_date: recurrence.endDate,
+          p_time: timeOfDay,
+          p_days_of_week: recurrence.days,
+          p_seats: Number(form.seats),
+          p_distance_m: distance_m,
+          p_route: route,
+        })
+        if (!count) {
+          throw new Error('Aucune date à venir ne correspond aux jours choisis.')
+        }
+        setNotice(`${count} trajet${count > 1 ? 's' : ''} publié${count > 1 ? 's' : ''}.`)
+      } else {
+        await createRide.mutateAsync({
+          driver_id: userId,
+          origin: o.label,
+          destination: d.label,
+          time: new Date(form.time).toISOString(),
+          seats: Number(form.seats),
+          origin_lat: o.lat,
+          origin_lng: o.lng,
+          dest_lat: d.lat,
+          dest_lng: d.lng,
+          meeting_label: m ? m.label : null,
+          meeting_lat: m ? m.lat : null,
+          meeting_lng: m ? m.lng : null,
+          route,
+          distance_m,
+        })
+        setNotice('Trajet publié.')
+      }
+
       setForm(emptyForm)
+      setRecurrence(emptyRecurrence)
       setShowForm(false)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
   }
 
-  const minDateTime = useMemo(() => new Date().toISOString().slice(0, 16), [])
   const setField = (key) => (value) => setForm((f) => ({ ...f, [key]: value }))
 
   const pt = useMemo(() => (point ? [point.lat, point.lng] : null), [point])
@@ -162,12 +200,16 @@ export default function Carpooling({ session }) {
     mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  const shownError = error ?? loadError?.message ?? null
+
   return (
     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
       <header className="mb-4">
         <h1 className="text-2xl font-semibold">Trajets du campus</h1>
         <p className="text-pine-700 text-sm">{session.user.email}</p>
       </header>
+
+      <OfflineNotice />
 
       <div className="mb-2 flex gap-2">
         <div className="min-w-0 flex-1">
@@ -177,6 +219,7 @@ export default function Carpooling({ session }) {
             selected={point}
             onSelect={setPoint}
             LeftIcon={Search}
+            shortcuts={HUB_PLACES}
             ariaLabel="Rechercher une adresse ou une ville"
             placeholder="Ville, adresse, lieu…"
           />
@@ -215,8 +258,8 @@ export default function Carpooling({ session }) {
         </div>
       ) : (
         <p className="text-pine-500 mb-4 text-xs">
-          Choisissez une adresse dans les suggestions pour voir les trajets qui passent près de
-          vous, ou tapez une ville pour filtrer la liste.
+          Touchez un hub du campus, choisissez une adresse dans les suggestions pour voir les trajets
+          qui passent près de vous, ou tapez une ville pour filtrer la liste.
         </p>
       )}
 
@@ -301,7 +344,7 @@ export default function Carpooling({ session }) {
               onChange={setField('origin')}
               selected={form.originPlace}
               onSelect={setField('originPlace')}
-              shortcuts={[CAMPUS]}
+              shortcuts={HUB_PLACES}
               ariaLabel="Départ"
               placeholder="Départ (ex. Gare de Poitiers)"
             />
@@ -311,7 +354,7 @@ export default function Carpooling({ session }) {
               onChange={setField('destination')}
               selected={form.destPlace}
               onSelect={setField('destPlace')}
-              shortcuts={[CAMPUS]}
+              shortcuts={HUB_PLACES}
               ariaLabel="Arrivée"
               placeholder="Arrivée (ex. Campus)"
             />
@@ -321,6 +364,7 @@ export default function Carpooling({ session }) {
               selected={form.meetingPlace}
               onSelect={setField('meetingPlace')}
               LeftIcon={Flag}
+              shortcuts={HUB_PLACES}
               ariaLabel="Point de rendez-vous"
               placeholder="Point de rendez-vous (optionnel)"
             />
@@ -346,19 +390,35 @@ export default function Carpooling({ session }) {
                 ))}
               </select>
             </div>
+
+            <RecurrenceFields
+              value={recurrence}
+              onChange={setRecurrence}
+              startDate={form.time.slice(0, 10)}
+            />
+
             <button
               type="submit"
               disabled={busy}
               className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
             >
-              {busy ? 'Calcul du trajet…' : 'Publier le trajet'}
+              {busy
+                ? 'Publication…'
+                : recurrence.enabled
+                  ? 'Publier la série de trajets'
+                  : 'Publier le trajet'}
             </button>
           </form>
         )}
       </section>
 
-      {error && (
-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
+      {notice && (
+        <p className="bg-pine-100 text-pine-900 mb-4 rounded-xl px-4 py-3 text-sm" role="status">
+          {notice}
+        </p>
+      )}
+      {shownError && (
+        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{shownError}</p>
       )}
 
       <section>
@@ -401,8 +461,16 @@ export default function Carpooling({ session }) {
                       <span className="text-pine-500"> · à {formatDistance(ride.near)}</span>
                     )}
                   </p>
-                  {ride.driver_id === userId && (
-                    <p className="text-pine-500 mt-1 text-xs">Vous conduisez ce trajet</p>
+                  {(ride.driver_id === userId || ride.recurrence_group_id) && (
+                    <p className="text-pine-500 mt-1 flex items-center gap-1 text-xs">
+                      {ride.driver_id === userId && 'Vous conduisez ce trajet'}
+                      {ride.driver_id === userId && ride.recurrence_group_id && ' · '}
+                      {ride.recurrence_group_id && (
+                        <>
+                          <Repeat size={12} /> Hebdomadaire
+                        </>
+                      )}
+                    </p>
                   )}
                 </div>
                 <span className="bg-signal flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-sm font-medium">

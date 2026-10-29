@@ -127,15 +127,17 @@ export default function AddressInput({
       </div>
 
       {shortcuts.length > 0 && !selected && (
-        <div className="mt-2 flex flex-wrap gap-2">
+        // Une seule ligne défilante : 7 hubs en pastilles sur 3 champs, sans écraser le formulaire
+        <div className="-mx-1 mt-2 flex gap-2 overflow-x-auto px-1 pb-1">
           {shortcuts.map((place) => (
             <button
               key={place.label}
               type="button"
               onClick={() => pick(place)}
-              className="border-pine-100 text-pine-700 rounded-full border bg-white px-3 py-1 text-xs"
+              title={place.label}
+              className="border-pine-100 text-pine-700 shrink-0 rounded-full border bg-white px-3 py-1 text-xs whitespace-nowrap"
             >
-              {place.label}
+              {place.short ?? place.label}
             </button>
           ))}
         </div>

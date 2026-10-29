@@ -1,54 +1,87 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import PushToggle from '../components/PushToggle'
+import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import { supabase } from '../lib/supabase'
+import { useProfile, useSaveProfile } from '../lib/queries'
 
 const inputClass =
   'border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white px-4 py-3 outline-none'
+
+// Formulaire séparé : il (re)démarre avec le profil chargé, sans effet de synchronisation
+function ProfileForm({ userId, profile }) {
+  const save = useSaveProfile(userId)
+  const [values, setValues] = useState({
+    full_name: profile?.full_name ?? '',
+    study: profile?.study ?? '',
+  })
+  const [saved, setSaved] = useState(false)
+
+  function submit(e) {
+    e.preventDefault()
+    setSaved(false)
+    save.mutate(values, { onSuccess: () => setSaved(true) })
+  }
+
+  return (
+    <form onSubmit={submit} className="border-pine-100 mt-6 space-y-4 rounded-2xl border bg-white p-4">
+      <h2 className="font-medium">Mon profil</h2>
+
+      <label className="block">
+        <span className="text-pine-700 mb-1 block text-sm">Prénom ou pseudo</span>
+        <input
+          value={values.full_name}
+          onChange={(e) => setValues((v) => ({ ...v, full_name: e.target.value }))}
+          maxLength={40}
+          placeholder="Ex. Gaspard"
+          className={inputClass}
+        />
+      </label>
+
+      <label className="block">
+        <span className="text-pine-700 mb-1 block text-sm">Licence / formation</span>
+        <input
+          value={values.study}
+          onChange={(e) => setValues((v) => ({ ...v, study: e.target.value }))}
+          maxLength={80}
+          placeholder="Ex. L3 Maths, M1 Droit, BTS…"
+          className={inputClass}
+        />
+      </label>
+
+      <p className="text-pine-500 text-xs">
+        Ces informations sont visibles par les autres étudiants connectés (sur les trajets que
+        vous conduisez).
+      </p>
+
+      {save.error && (
+        <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{save.error.message}</p>
+      )}
+      {saved && !save.error && (
+        <p className="bg-pine-100 text-pine-900 rounded-xl px-4 py-3 text-sm">Profil enregistré.</p>
+      )}
+
+      <button
+        type="submit"
+        disabled={save.isPending}
+        className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
+      >
+        {save.isPending ? 'Enregistrement…' : 'Enregistrer'}
+      </button>
+    </form>
+  )
+}
 
 export default function Account({ session }) {
   const navigate = useNavigate()
   const userId = session.user.id
   const [busy, setBusy] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [profile, setProfile] = useState({ full_name: '', study: '' })
-  const [message, setMessage] = useState(null) // { type: 'ok' | 'error', text }
-
-  useEffect(() => {
-    let active = true
-    supabase
-      .from('profiles')
-      .select('full_name, study')
-      .eq('id', userId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (!active) return
-        if (error) setMessage({ type: 'error', text: error.message })
-        else if (data) setProfile({ full_name: data.full_name ?? '', study: data.study ?? '' })
-      })
-    return () => {
-      active = false
-    }
-  }, [userId])
-
-  async function saveProfile(e) {
-    e.preventDefault()
-    setSaving(true)
-    setMessage(null)
-    const { error } = await supabase.from('profiles').upsert({
-      id: userId,
-      full_name: profile.full_name.trim() || null,
-      study: profile.study.trim() || null,
-      updated_at: new Date().toISOString(),
-    })
-    setMessage(
-      error ? { type: 'error', text: error.message } : { type: 'ok', text: 'Profil enregistré.' },
-    )
-    setSaving(false)
-  }
+  const profileQuery = useProfile(userId)
+  const profile = profileQuery.data
 
   async function signOut() {
     setBusy(true)
-    await supabase.auth.signOut()
+    await supabase.auth.signOut() // le cache (mémoire + hors-ligne) est vidé dans App.jsx
     setBusy(false)
     navigate('/trajets', { replace: true })
   }
@@ -58,54 +91,23 @@ export default function Account({ session }) {
       <h1 className="text-2xl font-semibold">Mon compte</h1>
       <p className="text-pine-700 mt-1 text-sm">{session.user.email}</p>
 
-      <form onSubmit={saveProfile} className="border-pine-100 mt-6 space-y-4 rounded-2xl border bg-white p-4">
-        <h2 className="font-medium">Mon profil</h2>
-
-        <label className="block">
-          <span className="text-pine-700 mb-1 block text-sm">Prénom ou pseudo</span>
-          <input
-            value={profile.full_name}
-            onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))}
-            maxLength={40}
-            placeholder="Ex. Gaspard"
-            className={inputClass}
+      {profileQuery.isSuccess && (
+        <div className="mt-3">
+          <ReliabilityBadge
+            score={profile?.reliability_score ?? 100}
+            totalRides={profile?.total_scheduled_rides ?? 0}
           />
-        </label>
+        </div>
+      )}
 
-        <label className="block">
-          <span className="text-pine-700 mb-1 block text-sm">Licence / formation</span>
-          <input
-            value={profile.study}
-            onChange={(e) => setProfile((p) => ({ ...p, study: e.target.value }))}
-            maxLength={80}
-            placeholder="Ex. L3 Maths, M1 Droit, BTS…"
-            className={inputClass}
-          />
-        </label>
+      {profileQuery.isPending ? (
+        <p className="text-pine-700 mt-6 text-sm">Chargement du profil…</p>
+      ) : (
+        // key : si le profil arrive après coup (ex. rafraîchi), le formulaire repart des bonnes valeurs
+        <ProfileForm key={profile?.id ?? 'new'} userId={userId} profile={profile} />
+      )}
 
-        <p className="text-pine-500 text-xs">
-          Ces informations sont visibles par les autres étudiants connectés (sur les trajets que
-          vous conduisez).
-        </p>
-
-        {message && (
-          <p
-            className={`rounded-xl px-4 py-3 text-sm ${
-              message.type === 'ok' ? 'bg-pine-100 text-pine-900' : 'bg-red-50 text-red-800'
-            }`}
-          >
-            {message.text}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={saving}
-          className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
-        >
-          {saving ? 'Enregistrement…' : 'Enregistrer'}
-        </button>
-      </form>
+      <PushToggle />
 
       <dl className="border-pine-100 divide-pine-100 mt-6 divide-y rounded-2xl border bg-white px-4">
         <div className="flex items-center justify-between py-3">

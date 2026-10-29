@@ -1,0 +1,9 @@
+diff a/package.json b/package.json	(rejected hunks)
+@@ -12,6 +12,7 @@
+   "dependencies": {
+     "@supabase/supabase-js": "^2.116.0",
+     "@tailwindcss/vite": "^4.3.3",
++    "@tanstack/react-query": "^5.105.0",
+     "leaflet": "^1.9.4",
+     "lucide-react": "^1.47.0",
+     "react": "^19.2.8",

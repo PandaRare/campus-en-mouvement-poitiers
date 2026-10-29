@@ -1,10 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } from 'lucide-react'
+import AttendancePanel from '../components/AttendancePanel'
+import OfflineNotice from '../components/OfflineNotice'
+import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import RidesMap from '../components/RidesMap'
 import { formatDistance, hasRoute } from '../lib/geo'
 import { DEFAULT_VEHICLE, VEHICLES, formatKg, tripSavings } from '../lib/co2'
+import {
+  useCancelRide,
+  useCancelSeries,
+  useJoinRide,
+  useLeaveRide,
+  useMessages,
+  useProfile,
+  useReservations,
+  useRide,
+  useSendMessage,
+} from '../lib/queries'
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'long',
@@ -19,161 +32,69 @@ const timeFormat = new Intl.DateTimeFormat('fr-FR', {
   minute: '2-digit',
 })
 
+const CONFIRM_WINDOW_MS = 7 * 24 * 3600 * 1000 // identique à la limite côté SQL
+
 export default function RideDetails({ session }) {
   const { id } = useParams()
   const navigate = useNavigate()
   const userId = session.user.id
   const bottomRef = useRef(null)
 
-  const [ride, setRide] = useState(null)
-  const [reservations, setReservations] = useState([])
-  const [messages, setMessages] = useState([])
-  const [draft, setDraft] = useState('')
-  const [driverProfile, setDriverProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
+  const rideQuery = useRide(id)
+  const reservationsQuery = useReservations(id)
+  const ride = rideQuery.data
+  const reservations = reservationsQuery.data ?? []
 
   const isDriver = ride?.driver_id === userId
   const myReservation = reservations.find((r) => r.user_id === userId)
   const isMember = Boolean(isDriver || myReservation)
 
-  const loadRide = useCallback(async () => {
-    const { data, error } = await supabase.from('rides').select('*').eq('id', id).maybeSingle()
-    if (error) setError(error.message)
-    else setRide(data)
-  }, [id])
+  const messagesQuery = useMessages(id, isMember)
+  const messages = messagesQuery.data ?? []
+  const driverQuery = useProfile(ride?.driver_id)
+  const driverProfile = driverQuery.data
 
-  const loadReservations = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('reservations')
-      .select('*')
-      .eq('ride_id', id)
-      .order('created_at', { ascending: true })
-    if (!error) setReservations(data ?? [])
-  }, [id])
+  const joinRide = useJoinRide()
+  const leaveRide = useLeaveRide()
+  const cancelRide = useCancelRide()
+  const cancelSeries = useCancelSeries()
+  const sendMessage = useSendMessage(id)
 
-  const loadMessages = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('ride_id', id)
-      .order('timestamp', { ascending: true })
-    if (!error) setMessages(data ?? [])
-  }, [id])
-
-  // Chargement initial
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    Promise.all([loadRide(), loadReservations(), loadMessages()]).then(() => {
-      if (active) setLoading(false)
-    })
-    return () => {
-      active = false
-    }
-  }, [loadRide, loadReservations, loadMessages])
-
-  // Temps réel : trajet, réservations et messages
-  useEffect(() => {
-    const channel = supabase
-      .channel(`ride-${id}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${id}` },
-        loadRide,
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'reservations', filter: `ride_id=eq.${id}` },
-        loadReservations,
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `ride_id=eq.${id}` },
-        (payload) =>
-          setMessages((prev) =>
-            prev.some((m) => m.id === payload.new.id) ? prev : [...prev, payload.new],
-          ),
-      )
-      .subscribe()
-
-    return () => supabase.removeChannel(channel)
-  }, [id, loadRide, loadReservations])
-
-  // Profil du conducteur (prénom + formation)
-  useEffect(() => {
-    const driverId = ride?.driver_id
-    if (!driverId) return
-    let active = true
-    supabase
-      .from('profiles')
-      .select('full_name, study')
-      .eq('id', driverId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (active) setDriverProfile(data)
-      })
-    return () => {
-      active = false
-    }
-  }, [ride?.driver_id])
+  const [draft, setDraft] = useState('')
 
   // Défilement automatique du chat
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'nearest' })
   }, [messages.length])
 
-  async function joinRide() {
-    setBusy(true)
-    setError(null)
-    const { error } = await supabase.rpc('join_ride', { p_ride_id: id })
-    if (error) setError(error.message)
-    else await Promise.all([loadRide(), loadReservations(), loadMessages()])
-    setBusy(false)
+  const busy =
+    joinRide.isPending || leaveRide.isPending || cancelRide.isPending || cancelSeries.isPending
+  const actionError =
+    joinRide.error ??
+    leaveRide.error ??
+    cancelRide.error ??
+    cancelSeries.error ??
+    sendMessage.error ??
+    rideQuery.error ??
+    null
+
+  async function handleCancelRide() {
+    await cancelRide.mutateAsync(id)
+    navigate('/mes-trajets', { replace: true })
   }
 
-  async function leaveRide() {
-    setBusy(true)
-    setError(null)
-    const { error } = await supabase.rpc('leave_ride', { p_ride_id: id })
-    if (error) {
-      setError(error.message)
-    } else {
-      setMessages([])
-      await Promise.all([loadRide(), loadReservations()])
-    }
-    setBusy(false)
+  async function handleCancelSeries() {
+    if (!window.confirm('Annuler tous les trajets à venir de cette série ?')) return
+    await cancelSeries.mutateAsync(id)
+    navigate('/mes-trajets', { replace: true })
   }
 
-  async function cancelRide() {
-    setBusy(true)
-    setError(null)
-    const { error } = await supabase.from('rides').delete().eq('id', id)
-    if (error) {
-      setError(error.message)
-      setBusy(false)
-    } else {
-      navigate('/mes-trajets', { replace: true })
-    }
-  }
-
-  async function sendMessage(e) {
+  function handleSend(e) {
     e.preventDefault()
     const text = draft.trim()
     if (!text) return
-
     setDraft('')
-    const { error } = await supabase
-      .from('messages')
-      .insert({ ride_id: id, user_id: userId, text })
-      .select()
-      .single()
-
-    if (error) {
-      setError(error.message)
-      setDraft(text)
-    }
+    sendMessage.mutate({ userId, text }, { onError: () => setDraft(text) })
   }
 
   function authorLabel(message) {
@@ -182,7 +103,7 @@ export default function RideDetails({ session }) {
     return `Passager ${message.user_id.slice(0, 4)}`
   }
 
-  if (loading) {
+  if (rideQuery.isPending) {
     return <p className="text-pine-700 p-8 text-sm">Chargement du trajet…</p>
   }
 
@@ -192,6 +113,7 @@ export default function RideDetails({ session }) {
         <button onClick={() => navigate('/trajets')} className="text-pine-700 mb-6 flex items-center gap-2 text-sm">
           <ArrowLeft size={18} /> Retour
         </button>
+        <OfflineNotice />
         <p className="border-pine-100 text-pine-700 rounded-2xl border border-dashed p-6 text-center text-sm">
           Ce trajet n'existe plus ou a été annulé.
         </p>
@@ -199,7 +121,9 @@ export default function RideDetails({ session }) {
     )
   }
 
-  const isPast = new Date(ride.time) < new Date()
+  const departure = new Date(ride.time)
+  const isPast = departure < new Date()
+  const canConfirm = isMember && isPast && new Date().getTime() - departure.getTime() < CONFIRM_WINDOW_MS
 
   // Estimation du CO₂ économisé par personne (véhicule moyen « essence » par défaut)
   const factor = VEHICLES.find((v) => v.id === DEFAULT_VEHICLE).factor
@@ -222,6 +146,8 @@ export default function RideDetails({ session }) {
         <ArrowLeft size={18} /> Retour
       </button>
 
+      <OfflineNotice />
+
       <section className="border-pine-100 rounded-2xl border bg-white p-5">
         <h1 className="text-xl leading-snug font-semibold">
           {ride.origin} → {ride.destination}
@@ -230,7 +156,7 @@ export default function RideDetails({ session }) {
         <ul className="text-pine-700 mt-4 space-y-2 text-sm">
           <li className="flex items-center gap-2">
             <Clock size={16} className="text-pine-500" />
-            {dateFormat.format(new Date(ride.time))}
+            {dateFormat.format(departure)}
           </li>
           <li className="flex items-center gap-2">
             <MapPin size={16} className="text-pine-500" />
@@ -246,6 +172,12 @@ export default function RideDetails({ session }) {
             <li className="flex items-start gap-2">
               <Flag size={16} className="text-pine-500 mt-0.5 shrink-0" />
               Rendez-vous : {ride.meeting_label}
+            </li>
+          )}
+          {ride.recurrence_group_id && (
+            <li className="flex items-center gap-2">
+              <Repeat size={16} className="text-pine-500" />
+              Trajet hebdomadaire
             </li>
           )}
           {ecoSaving && (
@@ -265,44 +197,63 @@ export default function RideDetails({ session }) {
           </div>
         )}
 
-        <p className="text-pine-500 mt-4 text-xs">
-          {isDriver
-            ? 'Vous êtes le conducteur'
-            : `Conducteur : ${
-                [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
-                ride.driver_id.slice(0, 4)
-              }`}
-        </p>
+        <div className="mt-4 space-y-2">
+          <p className="text-pine-500 text-xs">
+            {isDriver
+              ? 'Vous êtes le conducteur'
+              : `Conducteur : ${
+                  [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
+                  ride.driver_id.slice(0, 4)
+                }`}
+          </p>
+          {driverQuery.isSuccess && (
+            <ReliabilityBadge
+              score={driverProfile?.reliability_score ?? 100}
+              totalRides={driverProfile?.total_scheduled_rides ?? 0}
+            />
+          )}
+        </div>
 
-        <div className="mt-5">
+        <div className="mt-5 space-y-3">
           {isPast ? (
             <p className="bg-pine-100 rounded-xl px-4 py-3 text-sm">Ce trajet est terminé.</p>
           ) : isDriver ? (
-            <button
-              onClick={cancelRide}
-              disabled={busy}
-              className="border-pine-100 w-full rounded-xl border py-3.5 font-medium disabled:opacity-50"
-            >
-              {busy ? 'Annulation…' : 'Annuler ce trajet'}
-            </button>
+            <>
+              <button
+                onClick={handleCancelRide}
+                disabled={busy}
+                className="border-pine-100 w-full rounded-xl border py-3.5 font-medium disabled:opacity-50"
+              >
+                {cancelRide.isPending ? 'Annulation…' : 'Annuler ce trajet'}
+              </button>
+              {ride.recurrence_group_id && (
+                <button
+                  onClick={handleCancelSeries}
+                  disabled={busy}
+                  className="w-full rounded-xl border border-red-200 py-3.5 font-medium text-red-800 disabled:opacity-50"
+                >
+                  {cancelSeries.isPending ? 'Annulation…' : 'Annuler toute la série à venir'}
+                </button>
+              )}
+            </>
           ) : myReservation ? (
             <button
-              onClick={leaveRide}
+              onClick={() => leaveRide.mutate(id)}
               disabled={busy}
               className="border-pine-100 flex w-full items-center justify-center gap-2 rounded-xl border py-3.5 font-medium disabled:opacity-50"
             >
               <LogOut size={18} />
-              {busy ? 'Annulation…' : 'Quitter ce trajet'}
+              {leaveRide.isPending ? 'Annulation…' : 'Quitter ce trajet'}
             </button>
           ) : (
             <button
-              onClick={joinRide}
+              onClick={() => joinRide.mutate(id)}
               disabled={busy || ride.seats < 1}
               className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
             >
               {ride.seats < 1
                 ? 'Complet'
-                : busy
+                : joinRide.isPending
                   ? 'Réservation…'
                   : 'Rejoindre ce trajet'}
             </button>
@@ -310,9 +261,13 @@ export default function RideDetails({ session }) {
         </div>
       </section>
 
-      {error && (
-        <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
+      {actionError && (
+        <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">
+          {actionError.message}
+        </p>
       )}
+
+      {canConfirm && <AttendancePanel ride={ride} isDriver={isDriver} reservations={reservations} />}
 
       <section className="mt-6">
         <h2 className="mb-3 font-medium">Discussion</h2>
@@ -350,7 +305,7 @@ export default function RideDetails({ session }) {
               <div ref={bottomRef} />
             </div>
 
-            <form onSubmit={sendMessage} className="mt-3 flex gap-2">
+            <form onSubmit={handleSend} className="mt-3 flex gap-2">
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
