@@ -1,0 +1,3997 @@
+diff -ruN '--exclude=package-lock.json' a/.env.example b/.env.example
+--- a/.env.example	1970-01-01 01:00:00.000000000 +0100
++++ b/.env.example	2026-10-28 20:40:44.000000000 +0100
+@@ -0,0 +1,5 @@
++# Copiez ce fichier en .env.local (jamais commité) et remplissez les valeurs.
++VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co
++VITE_SUPABASE_ANON_KEY=eyJ...
++# Clé PUBLIQUE VAPID (notifications push) — générée avec : npx web-push generate-vapid-keys
++VITE_VAPID_PUBLIC_KEY=B...
+diff -ruN '--exclude=package-lock.json' a/.gitignore b/.gitignore
+--- a/.gitignore	2026-10-27 20:32:08.000000000 +0100
++++ b/.gitignore	2026-10-28 20:40:44.000000000 +0100
+@@ -22,3 +22,7 @@
+ *.njsproj
+ *.sln
+ *.sw?
++
++# Variables d environnement locales
++.env
++.env.local
+diff -ruN '--exclude=package-lock.json' a/README.md b/README.md
+--- a/README.md	2026-10-27 20:32:08.000000000 +0100
++++ b/README.md	2026-10-28 20:42:46.000000000 +0100
+@@ -1,16 +1,25 @@
+-# React + Vite
++# Campus en Mouvement — Poitiers
+ 
+-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
++PWA de covoiturage entre étudiants de l'Université de Poitiers.
++React + Vite · Tailwind CSS 4 · Supabase (Auth, Postgres, Realtime, Edge Functions) · React-Leaflet · TanStack Query.
+ 
+-Currently, two official plugins are available:
++## Démarrer
+ 
+-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
++```bash
++npm install
++cp .env.example .env.local     # puis renseigner les valeurs
++npm run dev
++```
+ 
+-## React Compiler
++Base de données : exécuter dans l'ordre `supabase_schema.sql`, `supabase_schema_v2.sql` (réservations, messages),
++`supabase_migration_v2.sql`, puis `supabase_migration_v3.sql` (voir `docs/INTEGRATION_V3.md`).
+ 
+-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
++Test PWA / hors-ligne / notifications (le service worker ne tourne qu'en build) :
+ 
+-## Expanding the ESLint configuration
++```bash
++npm run build && npm run preview
++```
+ 
+-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
++## Documentation
++
++- `docs/INTEGRATION_V3.md` — mise en place de la v3, étape par étape
+diff -ruN '--exclude=package-lock.json' a/RidesMap.jsx b/RidesMap.jsx
+--- a/RidesMap.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/RidesMap.jsx	1970-01-01 01:00:00.000000000 +0100
+@@ -1,153 +0,0 @@
+-import { Fragment, useEffect, useMemo } from 'react'
+-import { MapContainer, TileLayer, Polyline, Marker, Circle, Tooltip, useMap } from 'react-leaflet'
+-import L from 'leaflet'
+-import { CAMPUS } from '../lib/geo'
+-
+-// Fond de carte CARTO « Voyager » (données © OpenStreetMap) : plus lisible que le fond OSM standard
+-const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+-const ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+-const dot = (color, size = 18) =>
+-  L.divIcon({
+-    className: '',
+-    html: `<span style="display:block;width:${size}px;height:${size}px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.45)"></span>`,
+-    iconSize: [size, size],
+-    iconAnchor: [size / 2, size / 2],
+-  })
+-
+-const ICONS = {
+-  small: dot('#2f7d63', 14),
+-  origin: dot('#2f7d63', 20),
+-  dest: dot('#123b31', 20),
+-  meeting: dot('#f4c04a', 22),
+-  me: dot('#2563eb', 20),
+-}
+-
+-// Recadre la carte quand la liste de points change
+-function FitTo({ boundsKey }) {
+-  const map = useMap()
+-  useEffect(() => {
+-    if (!boundsKey) return
+-    const points = JSON.parse(boundsKey)
+-    if (points.length === 1) map.setView(points[0], 15)
+-    else map.fitBounds(points, { padding: [28, 28], maxZoom: 16 })
+-  }, [map, boundsKey])
+-  return null
+-}
+-
+-const last = (arr) => arr[arr.length - 1]
+-
+-export default function RidesMap({
+-  rides,
+-  selectedId = null,
+-  onSelect,
+-  point = null,
+-  radius = null,
+-  height = 288,
+-}) {
+-  const selected = rides.find((r) => r.id === selectedId) ?? null
+-
+-  const boundsKey = useMemo(() => {
+-    const pts = []
+-    if (selected) {
+-      pts.push(...selected.route)
+-      if (selected.meeting_lat != null) pts.push([selected.meeting_lat, selected.meeting_lng])
+-    } else {
+-      rides.forEach((r) => pts.push(r.route[0], last(r.route)))
+-    }
+-    if (point) {
+-      if (radius) {
+-        const b = L.latLng(point).toBounds(radius * 2)
+-        pts.push([b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()])
+-      } else {
+-        pts.push(point)
+-      }
+-    }
+-    return pts.length ? JSON.stringify(pts) : ''
+-  }, [selected, rides, point, radius])
+-
+-  // Le trajet sélectionné est dessiné en dernier pour rester au-dessus
+-  const ordered = [...rides].sort((a, b) => (a.id === selectedId) - (b.id === selectedId))
+-  const toggle = (id) => onSelect?.(id === selectedId ? null : id)
+-
+-  return (
+-    <MapContainer
+-      center={[CAMPUS.lat, CAMPUS.lng]}
+-      zoom={13}
+-      scrollWheelZoom={false}
+-      style={{ height }}
+-    >
+-      <TileLayer url={TILE_URL} attribution={ATTRIBUTION} subdomains="abcd" maxZoom={19} />
+-      <FitTo boundsKey={boundsKey} />
+-
+-      {ordered.map((ride) => {
+-        const isSelected = ride.id === selectedId
+-        return (
+-          <Fragment key={ride.id}>
+-            <Polyline
+-              positions={ride.route}
+-              pathOptions={{
+-                color: isSelected ? '#123b31' : '#2f7d63',
+-                weight: isSelected ? 6 : 4,
+-                opacity: isSelected ? 0.95 : 0.55,
+-              }}
+-            />
+-            {/* Ligne invisible plus épaisse : zone de clic facile au doigt */}
+-            {onSelect && (
+-              <Polyline
+-                positions={ride.route}
+-                pathOptions={{ color: '#000', weight: 24, opacity: 0 }}
+-                eventHandlers={{ click: () => toggle(ride.id) }}
+-              />
+-            )}
+-            {onSelect && !isSelected && (
+-              <Marker
+-                position={ride.route[0]}
+-                icon={ICONS.small}
+-                eventHandlers={{ click: () => toggle(ride.id) }}
+-              />
+-            )}
+-          </Fragment>
+-        )
+-      })}
+-
+-      {selected && (
+-        <>
+-          <Marker position={selected.route[0]} icon={ICONS.origin}>
+-            <Tooltip permanent direction="top" offset={[0, -10]} className="pin-tip">
+-              Départ
+-            </Tooltip>
+-          </Marker>
+-          <Marker position={last(selected.route)} icon={ICONS.dest}>
+-            <Tooltip permanent direction="top" offset={[0, -10]} className="pin-tip">
+-              Arrivée
+-            </Tooltip>
+-          </Marker>
+-          {selected.meeting_lat != null && (
+-            <Marker position={[selected.meeting_lat, selected.meeting_lng]} icon={ICONS.meeting}>
+-              <Tooltip permanent direction="top" offset={[0, -11]} className="pin-tip">
+-                Rendez-vous
+-              </Tooltip>
+-            </Marker>
+-          )}
+-        </>
+-      )}
+-
+-      {point && (
+-        <>
+-          <Marker position={point} icon={ICONS.me}>
+-            <Tooltip permanent direction="top" offset={[0, -10]} className="pin-tip">
+-              Vous
+-            </Tooltip>
+-          </Marker>
+-          {radius && (
+-            <Circle
+-              center={point}
+-              radius={radius}
+-              pathOptions={{ color: '#2563eb', weight: 1, fillOpacity: 0.08 }}
+-            />
+-          )}
+-        </>
+-      )}
+-    </MapContainer>
+-  )
+-}
+diff -ruN '--exclude=package-lock.json' a/docs/INTEGRATION_V3.md b/docs/INTEGRATION_V3.md
+--- a/docs/INTEGRATION_V3.md	1970-01-01 01:00:00.000000000 +0100
++++ b/docs/INTEGRATION_V3.md	2026-10-28 20:42:35.000000000 +0100
+@@ -0,0 +1,190 @@
++# Intégration v3 — pas à pas
++
++Ce guide applique la v3 à la main, **dans cet ordre** (la base d'abord, le code ensuite).
++Chaque étape peut être vérifiée avant de passer à la suivante.
++
++Nouveautés : hubs du campus · trajets récurrents · score de fiabilité · inscription réservée à
++l'Université de Poitiers · cache hors-ligne de « Mes trajets » · TanStack Query · notifications Web Push.
++
++> Raccourci : `git apply campus-en-mouvement-v3.patch` applique tous les changements de code d'un coup
++> (étapes 3 à 6). Les étapes 1, 2, 7 et 8 (Supabase, clés, fonction, webhooks) restent manuelles.
++
++---
++
++## Avant de commencer — ce qui a été corrigé dans vos premières fonctions SQL
++
++| Votre version | Problème | Version v3 |
++|---|---|---|
++| `create_recurring_rides(p_driver_id, …)` | n'importe quel utilisateur pouvait publier des trajets **au nom d'un autre**, sur n'importe quelle durée | le conducteur est toujours `auth.uid()` ; 180 jours max ; occurrences passées ignorées |
++| `record_user_attendance(p_user_id, p_attended)` | n'importe qui pouvait **fixer le score de n'importe qui** | `report_attendance()` : confirmations croisées conducteur ↔ passagers, score recalculé |
++| colonnes de score sur `profiles` | la policy « modifier son profil » permettait de s'attribuer 100 % | seuls `full_name`, `study` sont modifiables par l'utilisateur |
++| `available_seats` | colonne absente du schéma du dépôt | inutilisée : `rides.seats` = places **restantes** (comme dans tout le code) |
++| `search_rides_within_radius` | dépendait de `available_seats` | corrigée, dans un fichier **optionnel** (étape 1b) |
++
++Garde-fous ajoutés : on ne peut plus supprimer un trajet déjà parti, ni quitter un trajet passé
++(sinon un absent effacerait la preuve avant d'être signalé).
++
++---
++
++## 1. Base de données (Supabase → SQL Editor → New query)
++
++**1a.** Collez tout `supabase_migration_v3.sql` puis **Run**. Il est rejouable sans risque.
++Il crée : colonnes de récurrence et de fiabilité, table `ride_attendance`, fonctions
++`create_recurring_rides`, `cancel_ride_series`, `report_attendance`, `register_push_subscription`,
++le trigger de restriction de domaine, la table `push_subscriptions`.
++
++**1b. (optionnel)** `supabase_migration_v3_postgis.sql` : recherche par rayon côté serveur.
++L'appli n'en a pas besoin (la recherche de l'accueil se fait sur le tracé complet, plus précis).
++
++**1c.** Authentication → Providers → Email : laissez **« Confirm email » activé**. Sans cela, on pourrait
++s'inscrire avec l'adresse universitaire de quelqu'un d'autre.
++
++✅ Vérifier : `select proname from pg_proc where proname in ('report_attendance','create_recurring_rides','record_user_attendance');`
++→ `record_user_attendance` ne doit **plus** apparaître.
++
++⚠️ Les comptes existants hors domaine (ex. Gmail) continuent de se connecter. Pour créer un compte de test
++hors domaine : `drop trigger enforce_univ_email on auth.users;` (à recréer ensuite avec la migration).
++
++---
++
++## 2. Clés VAPID (notifications push)
++
++```bash
++npx web-push generate-vapid-keys
++```
++
++- La clé **publique** va dans `.env.local` (et dans les variables d'environnement Vercel) : `VITE_VAPID_PUBLIC_KEY=…`
++- La clé **privée** ne va **que** dans les secrets Supabase (étape 7). Ne la commitez jamais.
++
++Créez `.env.local` à partir de `.env.example` (nouveau fichier).
++
++---
++
++## 3. Dépendance
++
++```bash
++npm install @tanstack/react-query
++```
++
++---
++
++## 4. Fichiers à CRÉER (copier tels quels)
++
++| Fichier | Rôle |
++|---|---|
++| `src/lib/queryClient.js` | configuration du cache TanStack Query |
++| `src/lib/queries.js` | tous les appels Supabase en hooks + canal temps réel unique |
++| `src/lib/recurrence.js` | constantes de la récurrence |
++| `src/lib/push.js` | abonnement Web Push côté navigateur |
++| `src/components/AttendancePanel.jsx` | confirmation « le trajet a eu lieu » |
++| `src/components/RecurrenceFields.jsx` | jours + date de fin dans le formulaire |
++| `src/components/PushToggle.jsx` | bouton d'activation des notifications |
++| `src/components/OfflineNotice.jsx` | bandeau « hors connexion » |
++| `public/push-sw.js` | réception des notifications dans le service worker |
++| `supabase/functions/send-push/index.ts` | Edge Function d'envoi |
++| `.env.example` | modèle des variables d'environnement |
++
++## 5. Fichiers à REMPLACER (un par un)
++
++| Fichier | Ce qui change |
++|---|---|
++| `src/main.jsx` | enveloppe l'app dans `QueryClientProvider` |
++| `src/App.jsx` | canal temps réel unique ; vide les caches à la déconnexion (3 petits ajouts) |
++| `src/pages/Carpooling.jsx` | requêtes en cache ; **hubs** en raccourcis ; **récurrence** dans le formulaire ; correction du `min` de l'heure (UTC → heure locale) |
++| `src/pages/RideDetails.jsx` | requêtes en cache ; badge de fiabilité du conducteur ; panneau de confirmation ; « Annuler la série » ; l'annulation vérifie qu'elle a réussi |
++| `src/pages/MyRides.jsx` | requêtes en cache ; bandeau hors-ligne ; RDV et marqueur « hebdomadaire » |
++| `src/pages/Account.jsx` | profil via cache ; badge de fiabilité ; bouton de notifications |
++| `src/pages/Co2.jsx` | chargement via `useCo2Rides` (cache) au lieu d'un `useEffect` |
++| `src/pages/Auth.jsx` | refus côté formulaire des adresses hors domaine + message clair quand le serveur refuse |
++| `src/components/AddressInput.jsx` | raccourcis sur une ligne défilante (7 hubs sur 4 champs) |
++| `src/components/ReliabilityBadge.jsx` | aux couleurs de l'appli, « 98 % de trajets honorés » |
++| `src/constants/poitiersHubs.js` | ajout de `short` et de `HUB_PLACES` |
++| `vite.config.js` | cache hors-ligne **NetworkFirst** ciblé + `importScripts` du service worker push |
++| `index.html` | `theme-color`, icône iOS (nécessaire pour les notifications sur iPhone) |
++
++## 6. Fichiers à SUPPRIMER
++
++| Fichier | Pourquoi |
++|---|---|
++| `src/components/CreateRideForm.jsx` | jamais utilisé ; écrit pour des colonnes qui n'existent pas (`departure`, `departure_hub_id`…) |
++| `src/src/hooks/useCachedRides.js` | jamais utilisé, mauvais dossier (`src/src`) et mauvaises colonnes (`departure_time`) ; remplacé par TanStack Query |
++| `RidesMap.jsx` (à la racine) | doublon de `src/components/RidesMap.jsx` |
++| `src/components/pwaInstall.js` | doublon de `src/lib/pwaInstall.js` |
++
++✅ Vérifier : `npm run lint && npm run build` → aucune erreur.
++
++---
++
++## 7. Edge Function d'envoi
++
++```bash
++npx supabase login
++npx supabase init                      # seulement si le dossier supabase/ n'a pas de config.toml
++npx supabase link --project-ref <ref>  # <ref> = l'identifiant dans l'URL de votre projet
++
++openssl rand -hex 32                   # génère le WEBHOOK_SECRET (copiez le résultat)
++
++npx supabase secrets set \
++  VAPID_PUBLIC_KEY="<clé publique>" \
++  VAPID_PRIVATE_KEY="<clé privée>" \
++  VAPID_SUBJECT="mailto:vous@etu.univ-poitiers.fr" \
++  WEBHOOK_SECRET="<le secret généré>"
++
++npx supabase functions deploy send-push --no-verify-jwt
++```
++
++`--no-verify-jwt` : la fonction est appelée par un webhook, pas par un utilisateur ; elle se protège
++avec l'en-tête secret `x-webhook-secret`.
++
++## 8. Database Webhooks (Supabase → Database → Webhooks → Create a new hook)
++
++| | Webhook 1 | Webhook 2 |
++|---|---|---|
++| Name | `push_messages` | `push_reservations` |
++| Table | `public.messages` | `public.reservations` |
++| Events | **Insert** | **Insert** et **Delete** |
++| Type | Supabase Edge Functions → `send-push` (POST) | idem |
++| HTTP Headers | ajouter `x-webhook-secret` = votre `WEBHOOK_SECRET` | idem |
++
++(Votre document parlait d'une table `bookings` : dans ce projet elle s'appelle `reservations`.)
++
++Qui est prévenu : nouveau message → tous les membres du trajet **sauf l'auteur** ; passager qui rejoint ou
++quitte → le conducteur. Les messages d'un même trajet se remplacent dans la barre de notifications.
++
++---
++
++## 9. Vérifications
++
++1. **Domaine** : inscription avec une adresse Gmail → « réservée aux adresses @etu.univ-poitiers.fr… ».
++2. **Hubs** : « Proposer un trajet » → pastilles de hubs sous Départ / Arrivée / RDV (ligne défilante).
++3. **Récurrence** : cochez « Répéter chaque semaine », jours + date de fin → « N trajets publiés ».
++   Dans le détail d'un trajet : « Annuler toute la série à venir ».
++4. **Hors-ligne** (sur le site déployé en HTTPS, ou `npm run build && npm run preview`) : ouvrez « Mes trajets » et
++   un trajet, puis DevTools → Network → **Offline** → rechargez : les données déjà vues s'affichent.
++5. **Fiabilité** : après l'heure de départ, le détail du trajet affiche « Qui était présent ? » (conducteur)
++   ou « Le trajet a-t-il eu lieu ? » (passager). Pour tester sans attendre :
++   ```sql
++   update rides set time = now() - interval '1 hour' where id = '<id du trajet>';
++   ```
++6. **Push** : Compte → « Activer les notifications » ; fermez l'appli ; envoyez un message depuis un autre compte.
++   Journaux : Edge Functions → `send-push` → Logs.
++
++## 10. Publier
++
++```bash
++git add -A
++git commit -m "v3 : hubs, récurrence, fiabilité, domaine univ, cache hors-ligne, TanStack Query, push"
++git push
++```
++
++Ajoutez `VITE_VAPID_PUBLIC_KEY` dans Vercel (Settings → Environment Variables), puis redéployez.
++
++---
++
++## Limites à connaître
++
++- **iPhone** : les notifications push ne fonctionnent que si l'appli est **installée sur l'écran d'accueil** (iOS 16.4 ou plus).
++- **Coordonnées des hubs** : reprises de votre fichier, non vérifiées sur le terrain. Un hub mal placé fausse le tracé et la recherche : contrôlez-les sur une carte.
++- **Annulation d'un trajet par le conducteur** : les passagers ne reçoivent pas de notification (les réservations sont supprimées avec le trajet avant que la fonction ne puisse les lire). Le chat reste le canal pour prévenir.
++- **Testé** : migration SQL sur un Postgres de test (62 vérifications, dont les refus de sécurité) ; `npm run lint` et `npm run build`.
++  **Non testé en conditions réelles** : l'Edge Function, les webhooks et la réception d'une notification sur un vrai téléphone.
+diff -ruN '--exclude=package-lock.json' a/index.html b/index.html
+--- a/index.html	2026-10-27 20:32:08.000000000 +0100
++++ b/index.html	2026-10-28 20:40:43.000000000 +0100
+@@ -3,7 +3,11 @@
+   <head>
+     <meta charset="UTF-8" />
+     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
++    <meta name="theme-color" content="#123B31" />
++    <link rel="apple-touch-icon" href="/pwa-192.png" />
++    <meta name="apple-mobile-web-app-capable" content="yes" />
++    <meta name="apple-mobile-web-app-title" content="Campus" />
+     <title>Campus en Mouvement</title>
+     <link rel="preconnect" href="https://fonts.googleapis.com" />
+     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+diff -ruN '--exclude=package-lock.json' a/package.json b/package.json
+--- a/package.json	2026-10-27 20:32:08.000000000 +0100
++++ b/package.json	2026-10-28 20:42:35.000000000 +0100
+@@ -12,6 +12,7 @@
+   "dependencies": {
+     "@supabase/supabase-js": "^2.116.0",
+     "@tailwindcss/vite": "^4.3.3",
++    "@tanstack/react-query": "^5.105.0",
+     "leaflet": "^1.9.4",
+     "lucide-react": "^1.47.0",
+     "react": "^19.2.8",
+diff -ruN '--exclude=package-lock.json' a/public/push-sw.js b/public/push-sw.js
+--- a/public/push-sw.js	1970-01-01 01:00:00.000000000 +0100
++++ b/public/push-sw.js	2026-10-28 20:41:32.000000000 +0100
+@@ -0,0 +1,41 @@
++// Gestion des notifications Web Push.
++// Ce fichier est chargé par le service worker généré par vite-plugin-pwa
++// (option `workbox.importScripts` dans vite.config.js).
++
++self.addEventListener('push', (event) => {
++  let payload
++  try {
++    payload = event.data ? event.data.json() : {}
++  } catch {
++    payload = { title: 'Campus en Mouvement', body: event.data ? event.data.text() : '' }
++  }
++
++  const title = payload.title || 'Campus en Mouvement'
++  const options = {
++    body: payload.body || '',
++    icon: '/pwa-192.png',
++    badge: '/pwa-192.png',
++    tag: payload.tag, // un même tag remplace la notification précédente (ex. fil d'un trajet)
++    renotify: Boolean(payload.tag),
++    data: { url: payload.url || '/mes-trajets' },
++  }
++
++  event.waitUntil(self.registration.showNotification(title, options))
++})
++
++self.addEventListener('notificationclick', (event) => {
++  event.notification.close()
++  const target = new URL(event.notification.data?.url || '/', self.location.origin).href
++
++  event.waitUntil(
++    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
++      // Application déjà ouverte : on la ramène au premier plan sur la bonne page
++      for (const client of windows) {
++        if (new URL(client.url).origin === self.location.origin && 'focus' in client) {
++          return client.focus().then(() => ('navigate' in client ? client.navigate(target) : undefined))
++        }
++      }
++      return self.clients.openWindow(target)
++    }),
++  )
++})
+diff -ruN '--exclude=package-lock.json' a/src/App.jsx b/src/App.jsx
+--- a/src/App.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/App.jsx	2026-10-28 20:40:30.000000000 +0100
+@@ -15,6 +15,18 @@
+ import Co2 from './pages/Co2'
+ import Account from './pages/Account'
+ import InstallPrompt from './components/InstallPrompt'
++import { queryClient } from './lib/queryClient'
++import { useRealtimeSync } from './lib/queries'
++
++// Vide tout ce qui appartient à l'utilisateur sorti : cache mémoire + cache hors-ligne du service worker
++function clearUserCaches() {
++  queryClient.clear()
++  try {
++    caches.delete('supabase-cache')
++  } catch {
++    /* Cache API indisponible : sans conséquence */
++  }
++}
+ 
+ const NAV = [
+   { to: '/trajets', label: 'Accueil', Icon: Search },
+@@ -61,10 +73,16 @@
+       setSession(data.session)
+       setReady(true)
+     })
+-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next))
++    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
++      if (event === 'SIGNED_OUT') clearUserCaches()
++      setSession(next)
++    })
+     return () => sub.subscription.unsubscribe()
+   }, [])
+ 
++  // Un seul canal temps réel (trajets, réservations, messages) tant qu'on est connecté
++  useRealtimeSync(Boolean(session))
++
+   if (!ready) {
+     return <p className="text-pine-700 p-8 text-sm">Chargement…</p>
+   }
+diff -ruN '--exclude=package-lock.json' a/src/components/AddressInput.jsx b/src/components/AddressInput.jsx
+--- a/src/components/AddressInput.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/components/AddressInput.jsx	2026-10-28 09:14:07.000000000 +0100
+@@ -127,15 +127,17 @@
+       </div>
+ 
+       {shortcuts.length > 0 && !selected && (
+-        <div className="mt-2 flex flex-wrap gap-2">
++        // Une seule ligne défilante : 7 hubs en pastilles sur 3 champs, sans écraser le formulaire
++        <div className="-mx-1 mt-2 flex gap-2 overflow-x-auto px-1 pb-1">
+           {shortcuts.map((place) => (
+             <button
+               key={place.label}
+               type="button"
+               onClick={() => pick(place)}
+-              className="border-pine-100 text-pine-700 rounded-full border bg-white px-3 py-1 text-xs"
++              title={place.label}
++              className="border-pine-100 text-pine-700 shrink-0 rounded-full border bg-white px-3 py-1 text-xs whitespace-nowrap"
+             >
+-              {place.label}
++              {place.short ?? place.label}
+             </button>
+           ))}
+         </div>
+diff -ruN '--exclude=package-lock.json' a/src/components/AttendancePanel.jsx b/src/components/AttendancePanel.jsx
+--- a/src/components/AttendancePanel.jsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/components/AttendancePanel.jsx	2026-10-28 09:14:19.000000000 +0100
+@@ -0,0 +1,137 @@
++import { Check, X } from 'lucide-react'
++import { useMyAttendance, useProfiles, useReportAttendance } from '../lib/queries'
++
++// Bouton Oui / Non : plein quand c'est la réponse enregistrée
++function Choice({ selected, tone, onClick, disabled, children }) {
++  const palette =
++    selected && tone === 'ok'
++      ? 'bg-pine-900 border-pine-900 text-white'
++      : selected && tone === 'ko'
++        ? 'bg-red-700 border-red-700 text-white'
++        : 'border-pine-100 text-pine-700 bg-white'
++
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      disabled={disabled}
++      aria-pressed={selected}
++      className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl border px-3 py-2.5 text-sm font-medium disabled:opacity-50 ${palette}`}
++    >
++      {children}
++    </button>
++  )
++}
++
++// Confirmation « le trajet a bien eu lieu » une fois l'heure de départ passée.
++//   · le passager dit si le conducteur était au rendez-vous ;
++//   · le conducteur dit, pour chaque passager, s'il était présent.
++// Le score de fiabilité est recalculé côté serveur (fonction SQL report_attendance).
++export default function AttendancePanel({ ride, isDriver, reservations }) {
++  const mine = useMyAttendance(ride.id, true)
++  const report = useReportAttendance(ride.id)
++
++  const passengerIds = isDriver ? reservations.map((r) => r.user_id) : []
++  const profiles = useProfiles(passengerIds)
++
++  const answers = new Map((mine.data ?? []).map((row) => [row.user_id, row.attended]))
++  const nameOf = (id) =>
++    profiles.data?.find((p) => p.id === id)?.full_name || `Passager ${id.slice(0, 4)}`
++
++  const send = (userId, attended) => report.mutate({ userId, attended })
++  const pending = report.isPending
++
++  const everyoneAnswered = isDriver && passengerIds.every((id) => answers.has(id))
++
++  return (
++    <section className="border-pine-100 mt-6 rounded-2xl border bg-white p-5">
++      <h2 className="font-medium">
++        {isDriver ? 'Qui était présent ?' : 'Le trajet a-t-il eu lieu ?'}
++      </h2>
++      <p className="text-pine-700 mt-1 text-sm">
++        {isDriver
++          ? 'Votre réponse met à jour le taux de trajets honorés de vos passagers.'
++          : 'Votre réponse met à jour le taux de trajets honorés du conducteur.'}
++      </p>
++
++      {report.error && (
++        <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">
++          {report.error.message}
++        </p>
++      )}
++
++      {isDriver ? (
++        reservations.length === 0 ? (
++          <p className="text-pine-500 mt-3 text-sm">Aucun passager sur ce trajet.</p>
++        ) : (
++          <>
++            <ul className="mt-4 space-y-3">
++              {passengerIds.map((id) => (
++                <li key={id}>
++                  <p className="mb-1.5 text-sm font-medium">{nameOf(id)}</p>
++                  <div className="flex gap-2">
++                    <Choice
++                      tone="ok"
++                      selected={answers.get(id) === true}
++                      disabled={pending}
++                      onClick={() => send(id, true)}
++                    >
++                      <Check size={16} /> Présent
++                    </Choice>
++                    <Choice
++                      tone="ko"
++                      selected={answers.get(id) === false}
++                      disabled={pending}
++                      onClick={() => send(id, false)}
++                    >
++                      <X size={16} /> Absent
++                    </Choice>
++                  </div>
++                </li>
++              ))}
++            </ul>
++
++            {passengerIds.length > 1 && !everyoneAnswered && (
++              <button
++                type="button"
++                disabled={pending}
++                onClick={() =>
++                  passengerIds
++                    .filter((id) => !answers.has(id))
++                    .forEach((id) => report.mutate({ userId: id, attended: true }))
++                }
++                className="bg-pine-900 mt-4 w-full rounded-xl py-3 text-sm font-medium text-white disabled:opacity-50"
++              >
++                Tous présents
++              </button>
++            )}
++          </>
++        )
++      ) : (
++        <div className="mt-4 flex gap-2">
++          <Choice
++            tone="ok"
++            selected={answers.get(ride.driver_id) === true}
++            disabled={pending}
++            onClick={() => send(ride.driver_id, true)}
++          >
++            <Check size={16} /> Oui, trajet effectué
++          </Choice>
++          <Choice
++            tone="ko"
++            selected={answers.get(ride.driver_id) === false}
++            disabled={pending}
++            onClick={() => send(ride.driver_id, false)}
++          >
++            <X size={16} /> Conducteur absent
++          </Choice>
++        </div>
++      )}
++
++      <p className="text-pine-500 mt-3 text-xs">
++        Confirmation possible pendant 7 jours après le départ. Vous pouvez modifier votre réponse
++        pendant ce délai.
++      </p>
++    </section>
++  )
++}
+diff -ruN '--exclude=package-lock.json' a/src/components/CreateRideForm.jsx b/src/components/CreateRideForm.jsx
+--- a/src/components/CreateRideForm.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/components/CreateRideForm.jsx	1970-01-01 01:00:00.000000000 +0100
+@@ -1,204 +0,0 @@
+-// src/components/CreateRideForm.jsx
+-import React, { useState } from 'react';
+-import { supabase } from '../lib/supabase';
+-import { POITIERS_HUBS } from '../constants/poitiersHubs';
+-
+-const DAYS = [
+-  { id: 1, label: 'Lun' },
+-  { id: 2, label: 'Mar' },
+-  { id: 3, label: 'Mer' },
+-  { id: 4, label: 'Jeu' },
+-  { id: 5, label: 'Ven' },
+-  { id: 6, label: 'Sam' }
+-];
+-
+-export default function CreateRideForm({ userId, onSuccess }) {
+-  const [depHubId, setDepHubId] = useState(POITIERS_HUBS[0].id);
+-  const [arrHubId, setArrHubId] = useState(POITIERS_HUBS[3].id);
+-  const [date, setDate] = useState('');
+-  const [time, setTime] = useState('07:45');
+-  const [seats, setSeats] = useState(3);
+-  
+-  // État pour la récurrence
+-  const [isRecurring, setIsRecurring] = useState(false);
+-  const [endDate, setEndDate] = useState('');
+-  const [selectedDays, setSelectedDays] = useState([1, 2, 3, 4, 5]);
+-  const [loading, setLoading] = useState(false);
+-
+-  const toggleDay = (dayId) => {
+-    setSelectedDays((prev) =>
+-      prev.includes(dayId) ? prev.filter((d) => d !== dayId) : [...prev, dayId]
+-    );
+-  };
+-
+-  const handleSubmit = async (e) => {
+-    e.preventDefault();
+-    setLoading(true);
+-
+-    const depHub = POITIERS_HUBS.find((h) => h.id === depHubId);
+-    const arrHub = POITIERS_HUBS.find((h) => h.id === arrHubId);
+-
+-    try {
+-      if (isRecurring) {
+-        const { data: count, error } = await supabase.rpc('create_recurring_rides', {
+-          p_driver_id: userId,
+-          p_departure: depHub.name,
+-          p_arrival: arrHub.name,
+-          p_departure_hub_id: depHub.id,
+-          p_arrival_hub_id: arrHub.id,
+-          p_dep_lat: depHub.lat,
+-          p_dep_lng: depHub.lng,
+-          p_arr_lat: arrHub.lat,
+-          p_arr_lng: arrHub.lng,
+-          p_start_date: date,
+-          p_end_date: endDate,
+-          p_time: time,
+-          p_days_of_week: selectedDays,
+-          p_seats: Number(seats),
+-          p_price: 0
+-        });
+-        if (error) throw error;
+-        alert(`${count} trajets récurrents ont été publiés !`);
+-      } else {
+-        const departureTimestamp = new Date(`${date}T${time}`).toISOString();
+-        const { error } = await supabase.from('rides').insert({
+-          driver_id: userId,
+-          departure: depHub.name,
+-          arrival: arrHub.name,
+-          departure_hub_id: depHub.id,
+-          arrival_hub_id: arrHub.id,
+-          departure_lat: depHub.lat,
+-          departure_lng: depHub.lng,
+-          arrival_lat: arrHub.lat,
+-          arrival_lng: arrHub.lng,
+-          departure_time: departureTimestamp,
+-          available_seats: Number(seats)
+-        });
+-        if (error) throw error;
+-      }
+-      if (onSuccess) onSuccess();
+-    } catch (err) {
+-      console.error(err);
+-      alert(err.message);
+-    } finally {
+-      setLoading(false);
+-    }
+-  };
+-
+-  return (
+-    <form onSubmit={handleSubmit} className="space-y-4 bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+-      <div>
+-        <label className="block text-sm font-medium text-slate-700 mb-1">Hub de départ</label>
+-        <select
+-          value={depHubId}
+-          onChange={(e) => setDepHubId(e.target.value)}
+-          className="w-full rounded-lg border-slate-300 p-2.5 text-sm bg-slate-50"
+-        >
+-          {POITIERS_HUBS.map((hub) => (
+-            <option key={hub.id} value={hub.id}>{hub.name}</option>
+-          ))}
+-        </select>
+-      </div>
+-
+-      <div>
+-        <label className="block text-sm font-medium text-slate-700 mb-1">Hub d'arrivée</label>
+-        <select
+-          value={arrHubId}
+-          onChange={(e) => setArrHubId(e.target.value)}
+-          className="w-full rounded-lg border-slate-300 p-2.5 text-sm bg-slate-50"
+-        >
+-          {POITIERS_HUBS.map((hub) => (
+-            <option key={hub.id} value={hub.id}>{hub.name}</option>
+-          ))}
+-        </select>
+-      </div>
+-
+-      <div className="grid grid-cols-2 gap-3">
+-        <div>
+-          <label className="block text-sm font-medium text-slate-700 mb-1">
+-            {isRecurring ? 'Date de début' : 'Date du trajet'}
+-          </label>
+-          <input
+-            type="date"
+-            required
+-            value={date}
+-            onChange={(e) => setDate(e.target.value)}
+-            className="w-full rounded-lg border-slate-300 p-2 text-sm"
+-          />
+-        </div>
+-        <div>
+-          <label className="block text-sm font-medium text-slate-700 mb-1">Heure de départ</label>
+-          <input
+-            type="time"
+-            required
+-            value={time}
+-            onChange={(e) => setTime(e.target.value)}
+-            className="w-full rounded-lg border-slate-300 p-2 text-sm"
+-          />
+-        </div>
+-      </div>
+-
+-      {/* Activation de la récurrence (Emploi du temps) */}
+-      <div className="pt-2 border-t border-slate-100">
+-        <label className="flex items-center space-x-2 cursor-pointer">
+-          <input
+-            type="checkbox"
+-            checked={isRecurring}
+-            onChange={(e) => setIsRecurring(e.target.checked)}
+-            className="rounded text-emerald-600 focus:ring-emerald-500"
+-          />
+-          <span className="text-sm font-medium text-slate-800">
+-            Répéter selon mon emploi du temps hebdomadaire
+-          </span>
+-        </label>
+-
+-        {isRecurring && (
+-          <div className="mt-3 p-3 bg-emerald-50/60 rounded-lg space-y-3 border border-emerald-100">
+-            <div>
+-              <span className="block text-xs font-semibold uppercase text-slate-500 mb-1.5">
+-                Jours de récurrence
+-              </span>
+-              <div className="flex gap-1.5">
+-                {DAYS.map((d) => (
+-                  <button
+-                    type="button"
+-                    key={d.id}
+-                    onClick={() => toggleDay(d.id)}
+-                    className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
+-                      selectedDays.includes(d.id)
+-                        ? 'bg-emerald-600 text-white'
+-                        : 'bg-white text-slate-600 border border-slate-200'
+-                    }`}
+-                  >
+-                    {d.label}
+-                  </button>
+-                ))}
+-              </div>
+-            </div>
+-
+-            <div>
+-              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">
+-                Répéter jusqu'au
+-              </label>
+-              <input
+-                type="date"
+-                required={isRecurring}
+-                value={endDate}
+-                onChange={(e) => setEndDate(e.target.value)}
+-                className="w-full rounded-lg border-slate-300 p-2 text-sm bg-white"
+-              />
+-            </div>
+-          </div>
+-        )}
+-      </div>
+-
+-      <button
+-        type="submit"
+-        disabled={loading}
+-        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg transition"
+-      >
+-        {loading ? 'Publication en cours...' : isRecurring ? 'Générer les trajets récurrents' : 'Publier le trajet'}
+-      </button>
+-    </form>
+-  );
+-}
+diff -ruN '--exclude=package-lock.json' a/src/components/OfflineNotice.jsx b/src/components/OfflineNotice.jsx
+--- a/src/components/OfflineNotice.jsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/components/OfflineNotice.jsx	2026-10-28 09:13:38.000000000 +0100
+@@ -0,0 +1,33 @@
++import { useSyncExternalStore } from 'react'
++import { WifiOff } from 'lucide-react'
++
++function subscribe(callback) {
++  window.addEventListener('online', callback)
++  window.addEventListener('offline', callback)
++  return () => {
++    window.removeEventListener('online', callback)
++    window.removeEventListener('offline', callback)
++  }
++}
++
++// Bandeau affiché tant que l'appareil n'a plus de connexion
++export default function OfflineNotice() {
++  const online = useSyncExternalStore(
++    subscribe,
++    () => navigator.onLine,
++    () => true,
++  )
++
++  if (online) return null
++
++  return (
++    <p
++      role="status"
++      className="mb-4 flex items-start gap-2 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900"
++    >
++      <WifiOff size={16} className="mt-0.5 shrink-0" />
++      Hors connexion : vous voyez les dernières données chargées. Les messages et réservations
++      reprendront dès que le réseau revient.
++    </p>
++  )
++}
+diff -ruN '--exclude=package-lock.json' a/src/components/PushToggle.jsx b/src/components/PushToggle.jsx
+--- a/src/components/PushToggle.jsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/components/PushToggle.jsx	2026-10-28 09:13:44.000000000 +0100
+@@ -0,0 +1,75 @@
++import { useEffect, useState } from 'react'
++import { Bell, BellOff } from 'lucide-react'
++import { disablePush, enablePush, getPushState } from '../lib/push'
++
++// Active / désactive les notifications push sur cet appareil
++export default function PushToggle() {
++  const [state, setState] = useState(null) // null = vérification en cours
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState(null)
++
++  useEffect(() => {
++    let active = true
++    getPushState().then((next) => {
++      if (active) setState(next)
++    })
++    return () => {
++      active = false
++    }
++  }, [])
++
++  async function toggle() {
++    setBusy(true)
++    setError(null)
++    try {
++      if (state === 'subscribed') await disablePush()
++      else await enablePush()
++      setState(await getPushState())
++    } catch (err) {
++      setError(err.message)
++      setState(await getPushState())
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  if (state === null) return null
++
++  const hint = {
++    unsupported:
++      'Votre navigateur ne gère pas les notifications. Sur iPhone, installez d’abord l’application sur l’écran d’accueil.',
++    unconfigured: 'Les notifications ne sont pas encore configurées sur ce site.',
++    denied: 'Notifications bloquées : autorisez-les dans les réglages du navigateur, puis revenez ici.',
++    idle: 'Soyez prévenu d’un nouveau message, d’un passager ou d’un désistement, même application fermée.',
++    subscribed: 'Activées sur cet appareil.',
++  }[state]
++
++  const disabled = busy || ['unsupported', 'unconfigured', 'denied'].includes(state)
++
++  return (
++    <section className="border-pine-100 mt-6 rounded-2xl border bg-white p-4">
++      <h2 className="font-medium">Notifications</h2>
++      <p className="text-pine-700 mt-1 text-sm">{hint}</p>
++
++      {error && <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
++
++      <button
++        type="button"
++        onClick={toggle}
++        disabled={disabled}
++        className={`mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-3.5 font-medium disabled:opacity-50 ${
++          state === 'subscribed'
++            ? 'border-pine-100 border bg-white'
++            : 'bg-pine-900 text-white'
++        }`}
++      >
++        {state === 'subscribed' ? <BellOff size={18} /> : <Bell size={18} />}
++        {busy
++          ? 'Un instant…'
++          : state === 'subscribed'
++            ? 'Désactiver les notifications'
++            : 'Activer les notifications'}
++      </button>
++    </section>
++  )
++}
+diff -ruN '--exclude=package-lock.json' a/src/components/RecurrenceFields.jsx b/src/components/RecurrenceFields.jsx
+--- a/src/components/RecurrenceFields.jsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/components/RecurrenceFields.jsx	2026-10-28 20:41:32.000000000 +0100
+@@ -0,0 +1,81 @@
++import { Repeat } from 'lucide-react'
++import { MAX_RECURRENCE_DAYS, addDays } from '../lib/recurrence'
++
++// Jours au format ISO : 1 = lundi … 7 = dimanche (identique à la fonction SQL)
++const DAYS = [
++  { id: 1, label: 'Lun' },
++  { id: 2, label: 'Mar' },
++  { id: 3, label: 'Mer' },
++  { id: 4, label: 'Jeu' },
++  { id: 5, label: 'Ven' },
++  { id: 6, label: 'Sam' },
++  { id: 7, label: 'Dim' },
++]
++
++// value : { enabled, days, endDate } — startDate : date du premier trajet ("AAAA-MM-JJ")
++export default function RecurrenceFields({ value, onChange, startDate }) {
++  const set = (patch) => onChange({ ...value, ...patch })
++
++  const toggleDay = (id) =>
++    set({
++      days: value.days.includes(id) ? value.days.filter((d) => d !== id) : [...value.days, id],
++    })
++
++  return (
++    <div className="border-pine-100 rounded-xl border p-3">
++      <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
++        <input
++          type="checkbox"
++          checked={value.enabled}
++          onChange={(e) => set({ enabled: e.target.checked })}
++          className="accent-pine-500 h-4 w-4"
++        />
++        <Repeat size={16} className="text-pine-500" />
++        Répéter chaque semaine (emploi du temps)
++      </label>
++
++      {value.enabled && (
++        <div className="mt-3 space-y-3">
++          <div>
++            <span className="text-pine-700 mb-1.5 block text-xs">Jours du trajet</span>
++            <div className="flex flex-wrap gap-1.5">
++              {DAYS.map((day) => (
++                <button
++                  key={day.id}
++                  type="button"
++                  onClick={() => toggleDay(day.id)}
++                  aria-pressed={value.days.includes(day.id)}
++                  className={`rounded-full border px-3 py-1 text-sm ${
++                    value.days.includes(day.id)
++                      ? 'bg-pine-900 border-pine-900 text-white'
++                      : 'border-pine-100 text-pine-700 bg-white'
++                  }`}
++                >
++                  {day.label}
++                </button>
++              ))}
++            </div>
++          </div>
++
++          <label className="block">
++            <span className="text-pine-700 mb-1 block text-xs">Répéter jusqu’au</span>
++            <input
++              type="date"
++              required
++              value={value.endDate}
++              min={startDate || undefined}
++              max={startDate ? addDays(startDate, MAX_RECURRENCE_DAYS) : undefined}
++              onChange={(e) => set({ endDate: e.target.value })}
++              className="border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white px-3 py-3 outline-none"
++            />
++          </label>
++
++          <p className="text-pine-500 text-xs">
++            Un trajet est créé pour chaque jour choisi, jusqu’à 6 mois. Vous pourrez annuler toute la
++            série depuis le détail d’un trajet.
++          </p>
++        </div>
++      )}
++    </div>
++  )
++}
+diff -ruN '--exclude=package-lock.json' a/src/components/ReliabilityBadge.jsx b/src/components/ReliabilityBadge.jsx
+--- a/src/components/ReliabilityBadge.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/components/ReliabilityBadge.jsx	2026-10-28 09:13:59.000000000 +0100
+@@ -1,26 +1,36 @@
+-// src/components/ReliabilityBadge.jsx
+-import React from 'react';
++import { Check } from 'lucide-react'
+ 
++const percent = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 })
++
++// Taux de trajets honorés d'un membre.
++//   score       : reliability_score (0–100)
++//   totalRides  : total_scheduled_rides (trajets ayant fait l'objet d'une confirmation)
+ export function ReliabilityBadge({ score = 100, totalRides = 0 }) {
+-  if (totalRides === 0) {
++  if (!totalRides) {
+     return (
+-      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">
++      <span className="bg-pine-100 text-pine-700 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium">
+         Nouveau membre
+       </span>
+-    );
++    )
+   }
+ 
+-  const colorClass =
+-    score >= 90
+-      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+-      : score >= 75
+-      ? 'bg-amber-100 text-amber-800 border-amber-200'
+-      : 'bg-red-100 text-red-800 border-red-200';
++  const value = Number(score)
++  const tone =
++    value >= 90
++      ? 'bg-pine-100 text-pine-900'
++      : value >= 75
++        ? 'bg-amber-100 text-amber-900'
++        : 'bg-red-100 text-red-800'
+ 
+   return (
+-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${colorClass}`}>
+-      <span>✓ {score}% ponctuel</span>
+-      <span className="opacity-75 font-normal">({totalRides} trajets)</span>
++    <span
++      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${tone}`}
++    >
++      <Check size={12} strokeWidth={3} />
++      {percent.format(value)} % de trajets honorés
++      <span className="font-normal opacity-70">
++        ({totalRides} trajet{totalRides > 1 ? 's' : ''})
++      </span>
+     </span>
+-  );
++  )
+ }
+diff -ruN '--exclude=package-lock.json' a/src/components/pwaInstall.js b/src/components/pwaInstall.js
+--- a/src/components/pwaInstall.js	2026-10-27 20:32:08.000000000 +0100
++++ b/src/components/pwaInstall.js	1970-01-01 01:00:00.000000000 +0100
+@@ -1,50 +0,0 @@
+-// Capture l'événement `beforeinstallprompt` dès le chargement du module :
+-// il peut se déclencher avant le premier rendu de React.
+-let deferredPrompt = null
+-let installed = false
+-const listeners = new Set()
+-
+-const emit = () => listeners.forEach((fn) => fn())
+-
+-if (typeof window !== 'undefined') {
+-  window.addEventListener('beforeinstallprompt', (event) => {
+-    event.preventDefault()
+-    deferredPrompt = event
+-    emit()
+-  })
+-  window.addEventListener('appinstalled', () => {
+-    deferredPrompt = null
+-    installed = true
+-    emit()
+-  })
+-}
+-
+-export function subscribe(fn) {
+-  listeners.add(fn)
+-  return () => listeners.delete(fn)
+-}
+-
+-export const canInstall = () => deferredPrompt !== null
+-export const wasInstalled = () => installed
+-
+-export function isStandalone() {
+-  if (typeof window === 'undefined') return false
+-  return (
+-    window.matchMedia('(display-mode: standalone)').matches ||
+-    window.navigator.standalone === true
+-  )
+-}
+-
+-export function isIos() {
+-  if (typeof navigator === 'undefined') return false
+-  return /iphone|ipad|ipod/i.test(navigator.userAgent)
+-}
+-
+-export async function promptInstall() {
+-  if (!deferredPrompt) return null
+-  deferredPrompt.prompt()
+-  const { outcome } = await deferredPrompt.userChoice
+-  deferredPrompt = null
+-  emit()
+-  return outcome // 'accepted' | 'dismissed'
+-}
+diff -ruN '--exclude=package-lock.json' a/src/constants/poitiersHubs.js b/src/constants/poitiersHubs.js
+--- a/src/constants/poitiersHubs.js	2026-10-27 20:32:08.000000000 +0100
++++ b/src/constants/poitiersHubs.js	2026-10-28 09:14:04.000000000 +0100
+@@ -1,8 +1,12 @@
+ // src/constants/poitiersHubs.js
++// Points de rendez-vous normalisés : des coordonnées fixes évitent les imprécisions
++// des adresses saisies à la main et permettent de rapprocher deux trajets proches.
++// ⚠️ À vérifier sur place (clic droit sur Google Maps → copier les coordonnées).
+ export const POITIERS_HUBS = [
+   {
+     id: 'campus-b25',
+     name: 'Campus Sud — Sciences (Bât. B25 / SFA)',
++    short: 'Campus · Sciences',
+     zone: 'Campus Universitaire',
+     lat: 46.5681,
+     lng: 0.3842
+@@ -10,6 +14,7 @@
+   {
+     id: 'campus-ru-rabelais',
+     name: 'Campus Sud — RU Rabelais / Droit (A1)',
++    short: 'Campus · RU / Droit',
+     zone: 'Campus Universitaire',
+     lat: 46.5698,
+     lng: 0.3795
+@@ -17,6 +22,7 @@
+   {
+     id: 'campus-iut',
+     name: 'Campus Sud — IUT / Halle des Sports',
++    short: 'Campus · IUT',
+     zone: 'Campus Universitaire',
+     lat: 46.5644,
+     lng: 0.3861
+@@ -24,6 +30,7 @@
+   {
+     id: 'futuroscope-sp2mi',
+     name: 'Futuroscope — Téléport 2 (SP2MI / ENSMA)',
++    short: 'Futuroscope',
+     zone: 'Technopole Futuroscope',
+     lat: 46.6606,
+     lng: 0.3614
+@@ -31,6 +38,7 @@
+   {
+     id: 'centre-gare',
+     name: 'Centre-Ville — Gare SNCF (Pôle Multimodal)',
++    short: 'Gare SNCF',
+     zone: 'Centre-Ville',
+     lat: 46.5821,
+     lng: 0.3340
+@@ -38,6 +46,7 @@
+   {
+     id: 'centre-notre-dame',
+     name: 'Centre-Ville — Place Notre-Dame / Présidence',
++    short: 'Notre-Dame',
+     zone: 'Centre-Ville',
+     lat: 46.5831,
+     lng: 0.3444
+@@ -45,8 +54,17 @@
+   {
+     id: 'chu-medecine',
+     name: 'CHU La Milétrie — Faculté de Médecine & Pharmacie',
++    short: 'CHU / Médecine',
+     zone: 'Pôle Santé',
+     lat: 46.5565,
+     lng: 0.3910
+   }
+ ];
++
++// Même liste, au format attendu par <AddressInput shortcuts={…} /> : { label, short, lat, lng }
++export const HUB_PLACES = POITIERS_HUBS.map(({ name, short, lat, lng }) => ({
++  label: name,
++  short,
++  lat,
++  lng,
++}));
+diff -ruN '--exclude=package-lock.json' a/src/lib/push.js b/src/lib/push.js
+--- a/src/lib/push.js	1970-01-01 01:00:00.000000000 +0100
++++ b/src/lib/push.js	2026-10-28 09:13:27.000000000 +0100
+@@ -0,0 +1,73 @@
++// Notifications Web Push : abonnement de l'appareil et enregistrement côté Supabase.
++// L'envoi lui-même est fait par l'Edge Function `send-push` (voir supabase/functions/send-push).
++import { supabase } from './supabase'
++
++const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
++
++export const pushConfigured = Boolean(VAPID_PUBLIC_KEY)
++
++export function pushSupported() {
++  return (
++    typeof window !== 'undefined' &&
++    'serviceWorker' in navigator &&
++    'PushManager' in window &&
++    'Notification' in window
++  )
++}
++
++// La clé VAPID publique est en base64url ; l'API Push veut un Uint8Array
++function urlBase64ToUint8Array(base64) {
++  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
++  const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
++  return Uint8Array.from(raw, (c) => c.charCodeAt(0))
++}
++
++// 'unsupported' | 'unconfigured' | 'denied' | 'subscribed' | 'idle'
++export async function getPushState() {
++  if (!pushSupported()) return 'unsupported'
++  if (!pushConfigured) return 'unconfigured'
++  if (Notification.permission === 'denied') return 'denied'
++  try {
++    const reg = await navigator.serviceWorker.getRegistration()
++    const sub = await reg?.pushManager.getSubscription()
++    return sub && Notification.permission === 'granted' ? 'subscribed' : 'idle'
++  } catch {
++    return 'idle'
++  }
++}
++
++export async function enablePush() {
++  if (!pushSupported()) throw new Error('Les notifications ne sont pas disponibles sur cet appareil.')
++  if (!pushConfigured) throw new Error('Notifications non configurées (clé VAPID manquante).')
++
++  const permission = await Notification.requestPermission()
++  if (permission !== 'granted') {
++    throw new Error('Notifications refusées. Autorisez-les dans les réglages du navigateur.')
++  }
++
++  const reg = await navigator.serviceWorker.ready
++  const subscription =
++    (await reg.pushManager.getSubscription()) ??
++    (await reg.pushManager.subscribe({
++      userVisibleOnly: true,
++      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
++    }))
++
++  const json = subscription.toJSON()
++  const { error } = await supabase.rpc('register_push_subscription', {
++    p_endpoint: json.endpoint,
++    p_p256dh: json.keys.p256dh,
++    p_auth_key: json.keys.auth,
++    p_user_agent: navigator.userAgent.slice(0, 200),
++  })
++  if (error) throw error
++}
++
++export async function disablePush() {
++  const reg = await navigator.serviceWorker.getRegistration()
++  const subscription = await reg?.pushManager.getSubscription()
++  if (!subscription) return
++  const { endpoint } = subscription
++  await subscription.unsubscribe()
++  await supabase.from('push_subscriptions').delete().eq('endpoint', endpoint)
++}
+diff -ruN '--exclude=package-lock.json' a/src/lib/queries.js b/src/lib/queries.js
+--- a/src/lib/queries.js	1970-01-01 01:00:00.000000000 +0100
++++ b/src/lib/queries.js	2026-10-28 09:13:21.000000000 +0100
+@@ -0,0 +1,356 @@
++// Toutes les requêtes Supabase de l'application, en hooks TanStack Query.
++// Les pages ne parlent plus directement à Supabase : elles utilisent ces hooks.
++import { useEffect } from 'react'
++import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
++import { supabase } from './supabase'
++
++// ------------------------------------------------------------
++// Clés de cache
++// ------------------------------------------------------------
++export const keys = {
++  rides: ['rides'],
++  ride: (id) => ['ride', id],
++  reservations: (rideId) => ['reservations', rideId],
++  messages: (rideId) => ['messages', rideId],
++  myRides: (userId) => ['my-rides', userId],
++  profile: (userId) => ['profile', userId],
++  profiles: (ids) => ['profiles', ...ids],
++  attendance: (rideId) => ['attendance', rideId],
++}
++
++// Lève l'erreur Supabase (si besoin) et renvoie les données
++function unwrap({ data, error }) {
++  if (error) throw error
++  return data
++}
++
++const byTime = (a, b) => new Date(a.time) - new Date(b.time)
++
++// ------------------------------------------------------------
++// Lectures
++// ------------------------------------------------------------
++
++// ⚠️ L'URL de cette requête doit rester identique d'un appel à l'autre : le cache hors-ligne
++// (Workbox) l'utilise comme clé. On filtre donc sur le DÉBUT de la journée (stable), puis on
++// retire côté client les trajets déjà partis.
++function startOfToday() {
++  const d = new Date()
++  d.setHours(0, 0, 0, 0)
++  return d.toISOString()
++}
++
++const onlyUpcoming = (rows) => {
++  const now = Date.now()
++  return rows.filter((ride) => new Date(ride.time).getTime() >= now)
++}
++
++export function useUpcomingRides() {
++  return useQuery({
++    queryKey: keys.rides,
++    queryFn: async () =>
++      unwrap(
++        await supabase
++          .from('rides')
++          .select('*')
++          .gte('time', startOfToday())
++          .order('time', { ascending: true }),
++      ) ?? [],
++    select: onlyUpcoming,
++  })
++}
++
++export function useRide(id) {
++  return useQuery({
++    queryKey: keys.ride(id),
++    queryFn: async () => unwrap(await supabase.from('rides').select('*').eq('id', id).maybeSingle()),
++  })
++}
++
++export function useReservations(rideId) {
++  return useQuery({
++    queryKey: keys.reservations(rideId),
++    queryFn: async () =>
++      unwrap(
++        await supabase
++          .from('reservations')
++          .select('*')
++          .eq('ride_id', rideId)
++          .order('created_at', { ascending: true }),
++      ) ?? [],
++  })
++}
++
++// `enabled` : le chat n'est lisible que par les membres du trajet (RLS)
++export function useMessages(rideId, enabled) {
++  return useQuery({
++    queryKey: keys.messages(rideId),
++    enabled,
++    queryFn: async () =>
++      unwrap(
++        await supabase
++          .from('messages')
++          .select('*')
++          .eq('ride_id', rideId)
++          .order('timestamp', { ascending: true }),
++      ) ?? [],
++  })
++}
++
++export function useMyRides(userId) {
++  return useQuery({
++    queryKey: keys.myRides(userId),
++    queryFn: async () => {
++      const [driven, booked] = await Promise.all([
++        supabase
++          .from('rides')
++          .select('*')
++          .eq('driver_id', userId)
++          .order('time', { ascending: true }),
++        supabase
++          .from('reservations')
++          .select('id, created_at, rides (*)')
++          .eq('user_id', userId)
++          .order('created_at', { ascending: false }),
++      ])
++      if (driven.error) throw driven.error
++      if (booked.error) throw booked.error
++      return {
++        driving: driven.data ?? [],
++        joined: (booked.data ?? []).map((row) => row.rides).filter(Boolean).sort(byTime),
++      }
++    },
++  })
++}
++
++// Données de la page CO₂ : trajets conduits + trajets rejoints, avec le nombre de passagers
++export function useCo2Rides(userId) {
++  return useQuery({
++    queryKey: ['co2', userId],
++    queryFn: async () => {
++      const [driven, booked] = await Promise.all([
++        supabase
++          .from('rides')
++          .select('id, time, distance_m, reservations(count)')
++          .eq('driver_id', userId),
++        supabase
++          .from('reservations')
++          .select('id, rides (id, time, distance_m, reservations(count))')
++          .eq('user_id', userId),
++      ])
++      if (driven.error) throw driven.error
++      if (booked.error) throw booked.error
++
++      const normalize = (r) => ({
++        id: r.id,
++        time: r.time,
++        distance_m: r.distance_m,
++        passengers: r.reservations?.[0]?.count ?? 0,
++      })
++      return [
++        ...(driven.data ?? []).map(normalize),
++        ...(booked.data ?? []).map((row) => row.rides).filter(Boolean).map(normalize),
++      ]
++    },
++  })
++}
++
++const PROFILE_COLUMNS =
++  'id, full_name, study, completed_rides_count, total_scheduled_rides, reliability_score'
++
++export function useProfile(userId) {
++  return useQuery({
++    queryKey: keys.profile(userId),
++    enabled: Boolean(userId),
++    queryFn: async () =>
++      unwrap(await supabase.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle()),
++  })
++}
++
++// Profils de plusieurs personnes (ex. les passagers d'un trajet)
++export function useProfiles(ids) {
++  const sorted = [...ids].sort() // ordre stable = même URL = même entrée de cache
++  return useQuery({
++    queryKey: keys.profiles(sorted),
++    enabled: sorted.length > 0,
++    queryFn: async () =>
++      unwrap(await supabase.from('profiles').select('id, full_name').in('id', sorted)) ?? [],
++  })
++}
++
++// Mes propres signalements de présence sur un trajet (la RLS ne renvoie que les miens)
++export function useMyAttendance(rideId, enabled) {
++  return useQuery({
++    queryKey: keys.attendance(rideId),
++    enabled,
++    queryFn: async () =>
++      unwrap(
++        await supabase.from('ride_attendance').select('user_id, attended').eq('ride_id', rideId),
++      ) ?? [],
++  })
++}
++
++// ------------------------------------------------------------
++// Écritures
++// ------------------------------------------------------------
++function refreshAfterRideChange(qc, rideId) {
++  qc.invalidateQueries({ queryKey: keys.rides })
++  qc.invalidateQueries({ queryKey: ['my-rides'] })
++  qc.invalidateQueries({ queryKey: ['co2'] })
++  if (rideId) {
++    qc.invalidateQueries({ queryKey: keys.ride(rideId) })
++    qc.invalidateQueries({ queryKey: keys.reservations(rideId) })
++  }
++}
++
++export function useCreateRide() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (ride) => unwrap(await supabase.from('rides').insert(ride)),
++    onSuccess: () => refreshAfterRideChange(qc),
++  })
++}
++
++// Renvoie le nombre de trajets créés
++export function useCreateRecurringRides() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (args) => unwrap(await supabase.rpc('create_recurring_rides', args)),
++    onSuccess: () => refreshAfterRideChange(qc),
++  })
++}
++
++export function useJoinRide() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (rideId) => unwrap(await supabase.rpc('join_ride', { p_ride_id: rideId })),
++    onSuccess: (_data, rideId) => {
++      refreshAfterRideChange(qc, rideId)
++      qc.invalidateQueries({ queryKey: keys.messages(rideId) }) // le chat devient lisible
++    },
++  })
++}
++
++export function useLeaveRide() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (rideId) => unwrap(await supabase.rpc('leave_ride', { p_ride_id: rideId })),
++    onSuccess: (_data, rideId) => {
++      qc.removeQueries({ queryKey: keys.messages(rideId) }) // le chat redevient illisible
++      refreshAfterRideChange(qc, rideId)
++    },
++  })
++}
++
++export function useCancelRide() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (rideId) => {
++      // .select() : la RLS supprime silencieusement 0 ligne si le trajet est déjà parti
++      const rows = unwrap(await supabase.from('rides').delete().eq('id', rideId).select('id'))
++      if (!rows?.length) throw new Error('Ce trajet ne peut plus être annulé.')
++    },
++    onSuccess: (_data, rideId) => {
++      qc.removeQueries({ queryKey: keys.ride(rideId) })
++      refreshAfterRideChange(qc)
++    },
++  })
++}
++
++// Annule toutes les occurrences à venir d'un trajet récurrent. Renvoie leur nombre.
++export function useCancelSeries() {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async (rideId) =>
++      unwrap(await supabase.rpc('cancel_ride_series', { p_ride_id: rideId })),
++    onSuccess: () => refreshAfterRideChange(qc),
++  })
++}
++
++export function useSendMessage(rideId) {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async ({ userId, text }) =>
++      unwrap(
++        await supabase
++          .from('messages')
++          .insert({ ride_id: rideId, user_id: userId, text })
++          .select()
++          .single(),
++      ),
++    onSuccess: (message) => appendMessage(qc, message),
++  })
++}
++
++export function useReportAttendance(rideId) {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async ({ userId, attended }) =>
++      unwrap(
++        await supabase.rpc('report_attendance', {
++          p_ride_id: rideId,
++          p_user_id: userId,
++          p_attended: attended,
++        }),
++      ),
++    onSuccess: () => {
++      qc.invalidateQueries({ queryKey: keys.attendance(rideId) })
++      qc.invalidateQueries({ queryKey: ['profile'] }) // le score de la personne évaluée a changé
++    },
++  })
++}
++
++export function useSaveProfile(userId) {
++  const qc = useQueryClient()
++  return useMutation({
++    mutationFn: async ({ full_name, study }) =>
++      unwrap(
++        await supabase.from('profiles').upsert({
++          id: userId,
++          full_name: full_name.trim() || null,
++          study: study.trim() || null,
++          updated_at: new Date().toISOString(),
++        }),
++      ),
++    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profile(userId) }),
++  })
++}
++
++// ------------------------------------------------------------
++// Temps réel : un seul canal pour toute l'application.
++// Supabase n'envoie que les lignes que la RLS autorise l'utilisateur à lire.
++// ------------------------------------------------------------
++function appendMessage(qc, message) {
++  qc.setQueryData(keys.messages(message.ride_id), (old) => {
++    if (!old) return old // chat jamais ouvert : il se chargera tout seul
++    return old.some((m) => m.id === message.id) ? old : [...old, message]
++  })
++}
++
++export function useRealtimeSync(enabled) {
++  const qc = useQueryClient()
++
++  useEffect(() => {
++    if (!enabled) return
++
++    const channel = supabase
++      .channel('app-sync')
++      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, () => {
++        qc.invalidateQueries({ queryKey: keys.rides })
++        qc.invalidateQueries({ queryKey: ['ride'] })
++        qc.invalidateQueries({ queryKey: ['my-rides'] })
++      })
++      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, () => {
++        qc.invalidateQueries({ queryKey: ['reservations'] })
++        qc.invalidateQueries({ queryKey: ['my-rides'] })
++        qc.invalidateQueries({ queryKey: ['ride'] })
++      })
++      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) =>
++        appendMessage(qc, payload.new),
++      )
++      .subscribe()
++
++    return () => {
++      supabase.removeChannel(channel)
++    }
++  }, [enabled, qc])
++}
+diff -ruN '--exclude=package-lock.json' a/src/lib/queryClient.js b/src/lib/queryClient.js
+--- a/src/lib/queryClient.js	1970-01-01 01:00:00.000000000 +0100
++++ b/src/lib/queryClient.js	2026-10-28 09:12:51.000000000 +0100
+@@ -0,0 +1,21 @@
++import { QueryClient } from '@tanstack/react-query'
++
++// Cache partagé par toute l'application : passer d'une page à l'autre
++// (Accueil → détail d'un trajet → retour) réutilise les données en mémoire
++// au lieu de tout recharger.
++export const queryClient = new QueryClient({
++  defaultOptions: {
++    queries: {
++      staleTime: 30_000, // données « fraîches » pendant 30 s : pas de requête inutile
++      gcTime: 10 * 60_000, // gardées 10 min en mémoire après le dernier usage
++      retry: 1,
++      refetchOnWindowFocus: true,
++      // « offlineFirst » : on tente quand même la requête hors-ligne, ce qui laisse
++      // le service worker (Workbox NetworkFirst) répondre avec son cache.
++      networkMode: 'offlineFirst',
++    },
++    mutations: {
++      networkMode: 'online', // une écriture hors-ligne échoue tout de suite, avec un message clair
++    },
++  },
++})
+diff -ruN '--exclude=package-lock.json' a/src/lib/recurrence.js b/src/lib/recurrence.js
+--- a/src/lib/recurrence.js	1970-01-01 01:00:00.000000000 +0100
++++ b/src/lib/recurrence.js	2026-10-28 20:41:32.000000000 +0100
+@@ -0,0 +1,11 @@
++// Constantes et utilitaires de la récurrence (partagés par le formulaire et la page d'accueil)
++export const MAX_RECURRENCE_DAYS = 180 // limite côté serveur : 6 mois
++
++export const emptyRecurrence = { enabled: false, days: [1, 2, 3, 4, 5], endDate: '' }
++
++// "AAAA-MM-JJ" + n jours → "AAAA-MM-JJ"
++export function addDays(isoDate, n) {
++  const d = new Date(`${isoDate}T12:00:00`)
++  d.setDate(d.getDate() + n)
++  return d.toISOString().slice(0, 10)
++}
+diff -ruN '--exclude=package-lock.json' a/src/main.jsx b/src/main.jsx
+--- a/src/main.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/main.jsx	2026-10-28 20:40:34.000000000 +0100
+@@ -1,10 +1,14 @@
+ import { StrictMode } from 'react'
+ import { createRoot } from 'react-dom/client'
++import { QueryClientProvider } from '@tanstack/react-query'
+ import './index.css'
++import { queryClient } from './lib/queryClient'
+ import App from './App.jsx'
+ 
+ createRoot(document.getElementById('root')).render(
+   <StrictMode>
+-    <App />
++    <QueryClientProvider client={queryClient}>
++      <App />
++    </QueryClientProvider>
+   </StrictMode>,
+ )
+diff -ruN '--exclude=package-lock.json' a/src/pages/Account.jsx b/src/pages/Account.jsx
+--- a/src/pages/Account.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/Account.jsx	2026-10-28 14:14:07.000000000 +0100
+@@ -1,54 +1,87 @@
+-import { useEffect, useState } from 'react'
++import { useState } from 'react'
+ import { useNavigate } from 'react-router-dom'
++import PushToggle from '../components/PushToggle'
++import { ReliabilityBadge } from '../components/ReliabilityBadge'
+ import { supabase } from '../lib/supabase'
++import { useProfile, useSaveProfile } from '../lib/queries'
+ 
+ const inputClass =
+   'border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white px-4 py-3 outline-none'
+ 
++// Formulaire séparé : il (re)démarre avec le profil chargé, sans effet de synchronisation
++function ProfileForm({ userId, profile }) {
++  const save = useSaveProfile(userId)
++  const [values, setValues] = useState({
++    full_name: profile?.full_name ?? '',
++    study: profile?.study ?? '',
++  })
++  const [saved, setSaved] = useState(false)
++
++  function submit(e) {
++    e.preventDefault()
++    setSaved(false)
++    save.mutate(values, { onSuccess: () => setSaved(true) })
++  }
++
++  return (
++    <form onSubmit={submit} className="border-pine-100 mt-6 space-y-4 rounded-2xl border bg-white p-4">
++      <h2 className="font-medium">Mon profil</h2>
++
++      <label className="block">
++        <span className="text-pine-700 mb-1 block text-sm">Prénom ou pseudo</span>
++        <input
++          value={values.full_name}
++          onChange={(e) => setValues((v) => ({ ...v, full_name: e.target.value }))}
++          maxLength={40}
++          placeholder="Ex. Gaspard"
++          className={inputClass}
++        />
++      </label>
++
++      <label className="block">
++        <span className="text-pine-700 mb-1 block text-sm">Licence / formation</span>
++        <input
++          value={values.study}
++          onChange={(e) => setValues((v) => ({ ...v, study: e.target.value }))}
++          maxLength={80}
++          placeholder="Ex. L3 Maths, M1 Droit, BTS…"
++          className={inputClass}
++        />
++      </label>
++
++      <p className="text-pine-500 text-xs">
++        Ces informations sont visibles par les autres étudiants connectés (sur les trajets que
++        vous conduisez).
++      </p>
++
++      {save.error && (
++        <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{save.error.message}</p>
++      )}
++      {saved && !save.error && (
++        <p className="bg-pine-100 text-pine-900 rounded-xl px-4 py-3 text-sm">Profil enregistré.</p>
++      )}
++
++      <button
++        type="submit"
++        disabled={save.isPending}
++        className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
++      >
++        {save.isPending ? 'Enregistrement…' : 'Enregistrer'}
++      </button>
++    </form>
++  )
++}
++
+ export default function Account({ session }) {
+   const navigate = useNavigate()
+   const userId = session.user.id
+   const [busy, setBusy] = useState(false)
+-  const [saving, setSaving] = useState(false)
+-  const [profile, setProfile] = useState({ full_name: '', study: '' })
+-  const [message, setMessage] = useState(null) // { type: 'ok' | 'error', text }
+-
+-  useEffect(() => {
+-    let active = true
+-    supabase
+-      .from('profiles')
+-      .select('full_name, study')
+-      .eq('id', userId)
+-      .maybeSingle()
+-      .then(({ data, error }) => {
+-        if (!active) return
+-        if (error) setMessage({ type: 'error', text: error.message })
+-        else if (data) setProfile({ full_name: data.full_name ?? '', study: data.study ?? '' })
+-      })
+-    return () => {
+-      active = false
+-    }
+-  }, [userId])
+-
+-  async function saveProfile(e) {
+-    e.preventDefault()
+-    setSaving(true)
+-    setMessage(null)
+-    const { error } = await supabase.from('profiles').upsert({
+-      id: userId,
+-      full_name: profile.full_name.trim() || null,
+-      study: profile.study.trim() || null,
+-      updated_at: new Date().toISOString(),
+-    })
+-    setMessage(
+-      error ? { type: 'error', text: error.message } : { type: 'ok', text: 'Profil enregistré.' },
+-    )
+-    setSaving(false)
+-  }
++  const profileQuery = useProfile(userId)
++  const profile = profileQuery.data
+ 
+   async function signOut() {
+     setBusy(true)
+-    await supabase.auth.signOut()
++    await supabase.auth.signOut() // le cache (mémoire + hors-ligne) est vidé dans App.jsx
+     setBusy(false)
+     navigate('/trajets', { replace: true })
+   }
+@@ -58,54 +91,23 @@
+       <h1 className="text-2xl font-semibold">Mon compte</h1>
+       <p className="text-pine-700 mt-1 text-sm">{session.user.email}</p>
+ 
+-      <form onSubmit={saveProfile} className="border-pine-100 mt-6 space-y-4 rounded-2xl border bg-white p-4">
+-        <h2 className="font-medium">Mon profil</h2>
+-
+-        <label className="block">
+-          <span className="text-pine-700 mb-1 block text-sm">Prénom ou pseudo</span>
+-          <input
+-            value={profile.full_name}
+-            onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))}
+-            maxLength={40}
+-            placeholder="Ex. Gaspard"
+-            className={inputClass}
++      {profileQuery.isSuccess && (
++        <div className="mt-3">
++          <ReliabilityBadge
++            score={profile?.reliability_score ?? 100}
++            totalRides={profile?.total_scheduled_rides ?? 0}
+           />
+-        </label>
++        </div>
++      )}
+ 
+-        <label className="block">
+-          <span className="text-pine-700 mb-1 block text-sm">Licence / formation</span>
+-          <input
+-            value={profile.study}
+-            onChange={(e) => setProfile((p) => ({ ...p, study: e.target.value }))}
+-            maxLength={80}
+-            placeholder="Ex. L3 Maths, M1 Droit, BTS…"
+-            className={inputClass}
+-          />
+-        </label>
++      {profileQuery.isPending ? (
++        <p className="text-pine-700 mt-6 text-sm">Chargement du profil…</p>
++      ) : (
++        // key : si le profil arrive après coup (ex. rafraîchi), le formulaire repart des bonnes valeurs
++        <ProfileForm key={profile?.id ?? 'new'} userId={userId} profile={profile} />
++      )}
+ 
+-        <p className="text-pine-500 text-xs">
+-          Ces informations sont visibles par les autres étudiants connectés (sur les trajets que
+-          vous conduisez).
+-        </p>
+-
+-        {message && (
+-          <p
+-            className={`rounded-xl px-4 py-3 text-sm ${
+-              message.type === 'ok' ? 'bg-pine-100 text-pine-900' : 'bg-red-50 text-red-800'
+-            }`}
+-          >
+-            {message.text}
+-          </p>
+-        )}
+-
+-        <button
+-          type="submit"
+-          disabled={saving}
+-          className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
+-        >
+-          {saving ? 'Enregistrement…' : 'Enregistrer'}
+-        </button>
+-      </form>
++      <PushToggle />
+ 
+       <dl className="border-pine-100 divide-pine-100 mt-6 divide-y rounded-2xl border bg-white px-4">
+         <div className="flex items-center justify-between py-3">
+diff -ruN '--exclude=package-lock.json' a/src/pages/Auth.jsx b/src/pages/Auth.jsx
+--- a/src/pages/Auth.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/Auth.jsx	2026-10-28 14:14:13.000000000 +0100
+@@ -1,6 +1,11 @@
+ import { useState } from 'react'
+ import { supabase } from '../lib/supabase'
+ 
++// Même règle que le trigger SQL enforce_univ_email (le serveur reste l'arbitre final)
++const UNIV_EMAIL = /^[^@\s]+@(etu\.)?univ-poitiers\.fr$/i
++const UNIV_ERROR =
++  'L’inscription est réservée aux adresses @etu.univ-poitiers.fr et @univ-poitiers.fr.'
++
+ export default function Auth() {
+   const [mode, setMode] = useState('login') // 'login' | 'signup'
+   const [email, setEmail] = useState('')
+@@ -12,12 +17,18 @@
+ 
+   async function handleSubmit(e) {
+     e.preventDefault()
+-    setBusy(true)
+     setMessage(null)
+ 
++    if (isSignup && !UNIV_EMAIL.test(email.trim())) {
++      setMessage({ type: 'error', text: UNIV_ERROR })
++      return
++    }
++
++    setBusy(true)
++
+     const { error } = isSignup
+       ? await supabase.auth.signUp({
+-          email,
++          email: email.trim(),
+           password,
+           options: {
+             emailRedirectTo: `${window.location.origin}/`,
+@@ -26,7 +37,9 @@
+       : await supabase.auth.signInWithPassword({ email, password })
+ 
+     if (error) {
+-      setMessage({ type: 'error', text: error.message })
++      // Le trigger SQL refuse les autres domaines ; Supabase ne remonte alors qu'une erreur générique
++      const refused = /database error saving new user/i.test(error.message)
++      setMessage({ type: 'error', text: refused ? UNIV_ERROR : error.message })
+     } else if (isSignup) {
+       setMessage({
+         type: 'ok',
+@@ -58,7 +71,7 @@
+             autoComplete="email"
+             value={email}
+             onChange={(e) => setEmail(e.target.value)}
+-            placeholder="prenom.nom@univ.fr"
++            placeholder="prenom.nom@etu.univ-poitiers.fr"
+             className="border-pine-100 focus:border-pine-500 mt-1 w-full rounded-xl border bg-white px-4 py-3 text-base outline-none"
+           />
+         </label>
+diff -ruN '--exclude=package-lock.json' a/src/pages/Carpooling.jsx b/src/pages/Carpooling.jsx
+--- a/src/pages/Carpooling.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/Carpooling.jsx	2026-10-28 20:41:32.000000000 +0100
+@@ -1,12 +1,17 @@
+-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
++import { useMemo, useRef, useState } from 'react'
+ import { Link } from 'react-router-dom'
+-import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation } from 'lucide-react'
+-import { supabase } from '../lib/supabase'
++import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation, Repeat } from 'lucide-react'
+ import AddressInput from '../components/AddressInput'
++import OfflineNotice from '../components/OfflineNotice'
++import RecurrenceFields from '../components/RecurrenceFields'
+ import RidesMap from '../components/RidesMap'
+-import { CAMPUS, distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
++import { HUB_PLACES } from '../constants/poitiersHubs'
++import { MAX_RECURRENCE_DAYS, addDays, emptyRecurrence } from '../lib/recurrence'
++import { distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
++import { useCreateRecurringRides, useCreateRide, useUpcomingRides } from '../lib/queries'
+ 
+ const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
++const NO_RIDES = []
+ 
+ const dateFormat = new Intl.DateTimeFormat('fr-FR', {
+   weekday: 'short',
+@@ -31,46 +36,34 @@
+ const normalize = (value) =>
+   value
+     .normalize('NFD')
+-    .replace(/[\u0300-\u036f]/g, '')
++    .replace(/[̀-ͯ]/g, '')
+     .toLowerCase()
+     .trim()
+ 
++// Heure LOCALE pour <input type="datetime-local" min=…> (toISOString donnerait l'heure UTC)
++const localNowForInput = () =>
++  new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
++
+ export default function Carpooling({ session }) {
+-  const [rides, setRides] = useState([])
++  const { data: rides = NO_RIDES, isPending: loading, error: loadError } = useUpcomingRides()
++  const createRide = useCreateRide()
++  const createRecurring = useCreateRecurringRides()
++
+   const [query, setQuery] = useState('')
+   const [point, setPoint] = useState(null) // lieu cherché { label, lat, lng }
+   const [radius, setRadius] = useState(1000)
+   const [selectedId, setSelectedId] = useState(null)
+   const [form, setForm] = useState(emptyForm)
++  const [recurrence, setRecurrence] = useState(emptyRecurrence)
+   const [showForm, setShowForm] = useState(false)
+-  const [loading, setLoading] = useState(true)
+   const [busy, setBusy] = useState(false)
+   const [error, setError] = useState(null)
++  const [notice, setNotice] = useState(null)
++  const [minDateTime] = useState(localNowForInput)
+   const mapRef = useRef(null)
+ 
+   const userId = session.user.id
+ 
+-  const loadRides = useCallback(async () => {
+-    const { data, error } = await supabase
+-      .from('rides')
+-      .select('*')
+-      .gte('time', new Date().toISOString())
+-      .order('time', { ascending: true })
+-
+-    if (error) setError(error.message)
+-    else setRides(data ?? [])
+-    setLoading(false)
+-  }, [])
+-
+-  useEffect(() => {
+-    loadRides()
+-    const channel = supabase
+-      .channel('rides-live')
+-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, loadRides)
+-      .subscribe()
+-    return () => supabase.removeChannel(channel)
+-  }, [loadRides])
+-
+   function locateMe() {
+     if (!navigator.geolocation) {
+       setError('La géolocalisation n’est pas disponible sur cet appareil.')
+@@ -90,6 +83,7 @@
+   async function publishRide(e) {
+     e.preventDefault()
+     setError(null)
++    setNotice(null)
+ 
+     if (!form.originPlace || !form.destPlace) {
+       setError('Choisissez le départ et l’arrivée dans la liste de suggestions pour les placer sur la carte.')
+@@ -100,37 +94,81 @@
+       return
+     }
+ 
++    const [startDate, timeOfDay] = form.time.split('T') // « AAAA-MM-JJ », « HH:MM »
++    if (recurrence.enabled) {
++      if (recurrence.days.length === 0) {
++        setError('Choisissez au moins un jour de la semaine pour la répétition.')
++        return
++      }
++      if (!recurrence.endDate || recurrence.endDate < startDate) {
++        setError('La date de fin de répétition doit être le jour du premier trajet ou après.')
++        return
++      }
++      if (recurrence.endDate > addDays(startDate, MAX_RECURRENCE_DAYS)) {
++        setError('La répétition est limitée à 6 mois.')
++        return
++      }
++    }
++
+     setBusy(true)
+     const { originPlace: o, destPlace: d, meetingPlace: m } = form
+-    const { route, distance_m } = await fetchRoute([o.lat, o.lng], [d.lat, d.lng])
+ 
+-    const { error } = await supabase.from('rides').insert({
+-      driver_id: userId,
+-      origin: o.label,
+-      destination: d.label,
+-      time: new Date(form.time).toISOString(),
+-      seats: Number(form.seats),
+-      origin_lat: o.lat,
+-      origin_lng: o.lng,
+-      dest_lat: d.lat,
+-      dest_lng: d.lng,
+-      meeting_label: m ? m.label : null,
+-      meeting_lat: m ? m.lat : null,
+-      meeting_lng: m ? m.lng : null,
+-      route,
+-      distance_m,
+-    })
+-
+-    if (error) {
+-      setError(error.message)
+-    } else {
++    try {
++      const { route, distance_m } = await fetchRoute([o.lat, o.lng], [d.lat, d.lng])
++
++      if (recurrence.enabled) {
++        const count = await createRecurring.mutateAsync({
++          p_origin: o.label,
++          p_destination: d.label,
++          p_origin_lat: o.lat,
++          p_origin_lng: o.lng,
++          p_dest_lat: d.lat,
++          p_dest_lng: d.lng,
++          p_meeting_label: m ? m.label : null,
++          p_meeting_lat: m ? m.lat : null,
++          p_meeting_lng: m ? m.lng : null,
++          p_start_date: startDate,
++          p_end_date: recurrence.endDate,
++          p_time: timeOfDay,
++          p_days_of_week: recurrence.days,
++          p_seats: Number(form.seats),
++          p_distance_m: distance_m,
++          p_route: route,
++        })
++        if (!count) {
++          throw new Error('Aucune date à venir ne correspond aux jours choisis.')
++        }
++        setNotice(`${count} trajet${count > 1 ? 's' : ''} publié${count > 1 ? 's' : ''}.`)
++      } else {
++        await createRide.mutateAsync({
++          driver_id: userId,
++          origin: o.label,
++          destination: d.label,
++          time: new Date(form.time).toISOString(),
++          seats: Number(form.seats),
++          origin_lat: o.lat,
++          origin_lng: o.lng,
++          dest_lat: d.lat,
++          dest_lng: d.lng,
++          meeting_label: m ? m.label : null,
++          meeting_lat: m ? m.lat : null,
++          meeting_lng: m ? m.lng : null,
++          route,
++          distance_m,
++        })
++        setNotice('Trajet publié.')
++      }
++
+       setForm(emptyForm)
++      setRecurrence(emptyRecurrence)
+       setShowForm(false)
++    } catch (err) {
++      setError(err.message)
++    } finally {
++      setBusy(false)
+     }
+-    setBusy(false)
+   }
+ 
+-  const minDateTime = useMemo(() => new Date().toISOString().slice(0, 16), [])
+   const setField = (key) => (value) => setForm((f) => ({ ...f, [key]: value }))
+ 
+   const pt = useMemo(() => (point ? [point.lat, point.lng] : null), [point])
+@@ -162,6 +200,8 @@
+     mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+   }
+ 
++  const shownError = error ?? loadError?.message ?? null
++
+   return (
+     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
+       <header className="mb-4">
+@@ -169,6 +209,8 @@
+         <p className="text-pine-700 text-sm">{session.user.email}</p>
+       </header>
+ 
++      <OfflineNotice />
++
+       <div className="mb-2 flex gap-2">
+         <div className="min-w-0 flex-1">
+           <AddressInput
+@@ -177,6 +219,7 @@
+             selected={point}
+             onSelect={setPoint}
+             LeftIcon={Search}
++            shortcuts={HUB_PLACES}
+             ariaLabel="Rechercher une adresse ou une ville"
+             placeholder="Ville, adresse, lieu…"
+           />
+@@ -215,8 +258,8 @@
+         </div>
+       ) : (
+         <p className="text-pine-500 mb-4 text-xs">
+-          Choisissez une adresse dans les suggestions pour voir les trajets qui passent près de
+-          vous, ou tapez une ville pour filtrer la liste.
++          Touchez un hub du campus, choisissez une adresse dans les suggestions pour voir les trajets
++          qui passent près de vous, ou tapez une ville pour filtrer la liste.
+         </p>
+       )}
+ 
+@@ -301,7 +344,7 @@
+               onChange={setField('origin')}
+               selected={form.originPlace}
+               onSelect={setField('originPlace')}
+-              shortcuts={[CAMPUS]}
++              shortcuts={HUB_PLACES}
+               ariaLabel="Départ"
+               placeholder="Départ (ex. Gare de Poitiers)"
+             />
+@@ -311,7 +354,7 @@
+               onChange={setField('destination')}
+               selected={form.destPlace}
+               onSelect={setField('destPlace')}
+-              shortcuts={[CAMPUS]}
++              shortcuts={HUB_PLACES}
+               ariaLabel="Arrivée"
+               placeholder="Arrivée (ex. Campus)"
+             />
+@@ -321,6 +364,7 @@
+               selected={form.meetingPlace}
+               onSelect={setField('meetingPlace')}
+               LeftIcon={Flag}
++              shortcuts={HUB_PLACES}
+               ariaLabel="Point de rendez-vous"
+               placeholder="Point de rendez-vous (optionnel)"
+             />
+@@ -346,19 +390,35 @@
+                 ))}
+               </select>
+             </div>
++
++            <RecurrenceFields
++              value={recurrence}
++              onChange={setRecurrence}
++              startDate={form.time.slice(0, 10)}
++            />
++
+             <button
+               type="submit"
+               disabled={busy}
+               className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
+             >
+-              {busy ? 'Calcul du trajet…' : 'Publier le trajet'}
++              {busy
++                ? 'Publication…'
++                : recurrence.enabled
++                  ? 'Publier la série de trajets'
++                  : 'Publier le trajet'}
+             </button>
+           </form>
+         )}
+       </section>
+ 
+-      {error && (
+-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
++      {notice && (
++        <p className="bg-pine-100 text-pine-900 mb-4 rounded-xl px-4 py-3 text-sm" role="status">
++          {notice}
++        </p>
++      )}
++      {shownError && (
++        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{shownError}</p>
+       )}
+ 
+       <section>
+@@ -401,8 +461,16 @@
+                       <span className="text-pine-500"> · à {formatDistance(ride.near)}</span>
+                     )}
+                   </p>
+-                  {ride.driver_id === userId && (
+-                    <p className="text-pine-500 mt-1 text-xs">Vous conduisez ce trajet</p>
++                  {(ride.driver_id === userId || ride.recurrence_group_id) && (
++                    <p className="text-pine-500 mt-1 flex items-center gap-1 text-xs">
++                      {ride.driver_id === userId && 'Vous conduisez ce trajet'}
++                      {ride.driver_id === userId && ride.recurrence_group_id && ' · '}
++                      {ride.recurrence_group_id && (
++                        <>
++                          <Repeat size={12} /> Hebdomadaire
++                        </>
++                      )}
++                    </p>
+                   )}
+                 </div>
+                 <span className="bg-signal flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-sm font-medium">
+diff -ruN '--exclude=package-lock.json' a/src/pages/Co2.jsx b/src/pages/Co2.jsx
+--- a/src/pages/Co2.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/Co2.jsx	2026-10-28 14:14:13.000000000 +0100
+@@ -1,6 +1,6 @@
+-import { useEffect, useMemo, useState } from 'react'
++import { useMemo, useState } from 'react'
+ import { Leaf, TreePine } from 'lucide-react'
+-import { supabase } from '../lib/supabase'
++import { useCo2Rides } from '../lib/queries'
+ import {
+   VEHICLES,
+   DEFAULT_VEHICLE,
+@@ -31,8 +31,8 @@
+ export default function Co2({ session }) {
+   const userId = session.user.id
+   const [vehicle, setVehicle] = useState(readVehicle)
+-  const [rides, setRides] = useState(null) // null = chargement
+-  const [error, setError] = useState(null)
++  const { data: rides, error: loadError } = useCo2Rides(userId) // undefined = chargement
++  const error = loadError?.message ?? null
+   const [sim, setSim] = useState({ distance: '10', people: 2, perWeek: 4, weeks: 30, roundTrip: true })
+ 
+   const factor = VEHICLES.find((v) => v.id === vehicle)?.factor ?? 0.2
+@@ -46,40 +46,7 @@
+     }
+   }
+ 
+-  // --- Bilan réel : trajets conduits + trajets rejoints -------------------
+-  useEffect(() => {
+-    let active = true
+-    Promise.all([
+-      supabase
+-        .from('rides')
+-        .select('id, time, distance_m, reservations(count)')
+-        .eq('driver_id', userId),
+-      supabase
+-        .from('reservations')
+-        .select('id, rides (id, time, distance_m, reservations(count))')
+-        .eq('user_id', userId),
+-    ]).then(([driven, booked]) => {
+-      if (!active) return
+-      if (driven.error || booked.error) {
+-        setError((driven.error ?? booked.error).message)
+-        setRides([])
+-        return
+-      }
+-      const normalize = (r) => ({
+-        id: r.id,
+-        time: r.time,
+-        distance_m: r.distance_m,
+-        passengers: r.reservations?.[0]?.count ?? 0,
+-      })
+-      setRides([
+-        ...(driven.data ?? []).map(normalize),
+-        ...(booked.data ?? []).map((row) => row.rides).filter(Boolean).map(normalize),
+-      ])
+-    })
+-    return () => {
+-      active = false
+-    }
+-  }, [userId])
++  // --- Bilan réel : trajets conduits + trajets rejoints (useCo2Rides) ---
+ 
+   const stats = useMemo(() => {
+     const now = new Date()
+@@ -150,7 +117,7 @@
+         <p className="flex items-center gap-2 text-sm opacity-80">
+           <Leaf size={16} /> Mon bilan
+         </p>
+-        {rides === null ? (
++        {rides === undefined && !error ? (
+           <p className="mt-3 text-sm">Chargement…</p>
+         ) : (
+           <>
+diff -ruN '--exclude=package-lock.json' a/src/pages/MyRides.jsx b/src/pages/MyRides.jsx
+--- a/src/pages/MyRides.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/MyRides.jsx	2026-10-28 09:15:19.000000000 +0100
+@@ -1,7 +1,7 @@
+-import { useCallback, useEffect, useState } from 'react'
+ import { Link } from 'react-router-dom'
+-import { ChevronRight, Users } from 'lucide-react'
+-import { supabase } from '../lib/supabase'
++import { ChevronRight, Repeat, Users } from 'lucide-react'
++import OfflineNotice from '../components/OfflineNotice'
++import { useMyRides } from '../lib/queries'
+ 
+ const dateFormat = new Intl.DateTimeFormat('fr-FR', {
+   weekday: 'short',
+@@ -22,90 +22,65 @@
+ 
+   return (
+     <ul className="space-y-3">
+-      {rides.map((ride) => (
+-        <li key={ride.id}>
+-          <Link
+-            to={`/trajets/${ride.id}`}
+-            className="border-pine-100 active:bg-pine-50 flex items-center gap-3 rounded-2xl border bg-white p-4"
+-          >
+-            <div className="min-w-0 flex-1">
+-              <p className="truncate font-medium">
+-                {ride.origin} → {ride.destination}
+-              </p>
+-              <p className="text-pine-700 mt-1 text-sm">
+-                {dateFormat.format(new Date(ride.time))}
+-              </p>
+-              {new Date(ride.time) < new Date() && (
+-                <p className="text-pine-500 mt-1 text-xs">Terminé</p>
+-              )}
+-            </div>
+-            <span className="bg-signal flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-sm font-medium">
+-              <Users size={14} />
+-              {ride.seats}
+-            </span>
+-            <ChevronRight size={18} className="text-pine-500 shrink-0" />
+-          </Link>
+-        </li>
+-      ))}
++      {rides.map((ride) => {
++        const done = new Date(ride.time) < new Date()
++        return (
++          <li key={ride.id}>
++            <Link
++              to={`/trajets/${ride.id}`}
++              className="border-pine-100 active:bg-pine-50 flex items-center gap-3 rounded-2xl border bg-white p-4"
++            >
++              <div className="min-w-0 flex-1">
++                <p className="truncate font-medium">
++                  {ride.origin} → {ride.destination}
++                </p>
++                <p className="text-pine-700 mt-1 text-sm">
++                  {dateFormat.format(new Date(ride.time))}
++                </p>
++                {ride.meeting_label && !done && (
++                  <p className="text-pine-500 mt-1 truncate text-xs">RDV : {ride.meeting_label}</p>
++                )}
++                {(done || ride.recurrence_group_id) && (
++                  <p className="text-pine-500 mt-1 flex items-center gap-1 text-xs">
++                    {done && 'Terminé'}
++                    {done && ride.recurrence_group_id && ' · '}
++                    {ride.recurrence_group_id && (
++                      <>
++                        <Repeat size={12} /> Hebdomadaire
++                      </>
++                    )}
++                  </p>
++                )}
++              </div>
++              <span className="bg-signal flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-sm font-medium">
++                <Users size={14} />
++                {ride.seats}
++              </span>
++              <ChevronRight size={18} className="text-pine-500 shrink-0" />
++            </Link>
++          </li>
++        )
++      })}
+     </ul>
+   )
+ }
+ 
+ export default function MyRides({ session }) {
+-  const userId = session.user.id
+-  const [driving, setDriving] = useState([])
+-  const [joined, setJoined] = useState([])
+-  const [loading, setLoading] = useState(true)
+-  const [error, setError] = useState(null)
+-
+-  const load = useCallback(async () => {
+-    const [driven, booked] = await Promise.all([
+-      supabase
+-        .from('rides')
+-        .select('*')
+-        .eq('driver_id', userId)
+-        .order('time', { ascending: true }),
+-      supabase
+-        .from('reservations')
+-        .select('id, created_at, rides (*)')
+-        .eq('user_id', userId)
+-        .order('created_at', { ascending: false }),
+-    ])
+-
+-    if (driven.error || booked.error) {
+-      setError((driven.error ?? booked.error).message)
+-    } else {
+-      setError(null)
+-      setDriving(driven.data ?? [])
+-      setJoined(
+-        (booked.data ?? [])
+-          .map((row) => row.rides)
+-          .filter(Boolean)
+-          .sort((a, b) => new Date(a.time) - new Date(b.time)),
+-      )
+-    }
+-    setLoading(false)
+-  }, [userId])
+-
+-  useEffect(() => {
+-    load()
+-    const channel = supabase
+-      .channel('my-rides-live')
+-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, load)
+-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, load)
+-      .subscribe()
+-    return () => supabase.removeChannel(channel)
+-  }, [load])
++  const { data, isPending, error } = useMyRides(session.user.id)
++  const driving = data?.driving ?? []
++  const joined = data?.joined ?? []
+ 
+   return (
+     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
+       <h1 className="mb-5 text-2xl font-semibold">Mes trajets</h1>
+ 
+-      {error && (
+-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
++      <OfflineNotice />
++
++      {error && !data && (
++        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error.message}</p>
+       )}
+ 
+-      {loading ? (
++      {isPending ? (
+         <p className="text-pine-700 text-sm">Chargement…</p>
+       ) : (
+         <>
+diff -ruN '--exclude=package-lock.json' a/src/pages/RideDetails.jsx b/src/pages/RideDetails.jsx
+--- a/src/pages/RideDetails.jsx	2026-10-27 20:32:08.000000000 +0100
++++ b/src/pages/RideDetails.jsx	2026-10-28 20:41:32.000000000 +0100
+@@ -1,10 +1,23 @@
+-import { useCallback, useEffect, useRef, useState } from 'react'
++import { useEffect, useRef, useState } from 'react'
+ import { useNavigate, useParams } from 'react-router-dom'
+-import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf } from 'lucide-react'
+-import { supabase } from '../lib/supabase'
++import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } from 'lucide-react'
++import AttendancePanel from '../components/AttendancePanel'
++import OfflineNotice from '../components/OfflineNotice'
++import { ReliabilityBadge } from '../components/ReliabilityBadge'
+ import RidesMap from '../components/RidesMap'
+ import { formatDistance, hasRoute } from '../lib/geo'
+ import { DEFAULT_VEHICLE, VEHICLES, formatKg, tripSavings } from '../lib/co2'
++import {
++  useCancelRide,
++  useCancelSeries,
++  useJoinRide,
++  useLeaveRide,
++  useMessages,
++  useProfile,
++  useReservations,
++  useRide,
++  useSendMessage,
++} from '../lib/queries'
+ 
+ const dateFormat = new Intl.DateTimeFormat('fr-FR', {
+   weekday: 'long',
+@@ -19,161 +32,69 @@
+   minute: '2-digit',
+ })
+ 
++const CONFIRM_WINDOW_MS = 7 * 24 * 3600 * 1000 // identique à la limite côté SQL
++
+ export default function RideDetails({ session }) {
+   const { id } = useParams()
+   const navigate = useNavigate()
+   const userId = session.user.id
+   const bottomRef = useRef(null)
+ 
+-  const [ride, setRide] = useState(null)
+-  const [reservations, setReservations] = useState([])
+-  const [messages, setMessages] = useState([])
+-  const [draft, setDraft] = useState('')
+-  const [driverProfile, setDriverProfile] = useState(null)
+-  const [loading, setLoading] = useState(true)
+-  const [busy, setBusy] = useState(false)
+-  const [error, setError] = useState(null)
++  const rideQuery = useRide(id)
++  const reservationsQuery = useReservations(id)
++  const ride = rideQuery.data
++  const reservations = reservationsQuery.data ?? []
+ 
+   const isDriver = ride?.driver_id === userId
+   const myReservation = reservations.find((r) => r.user_id === userId)
+   const isMember = Boolean(isDriver || myReservation)
+ 
+-  const loadRide = useCallback(async () => {
+-    const { data, error } = await supabase.from('rides').select('*').eq('id', id).maybeSingle()
+-    if (error) setError(error.message)
+-    else setRide(data)
+-  }, [id])
+-
+-  const loadReservations = useCallback(async () => {
+-    const { data, error } = await supabase
+-      .from('reservations')
+-      .select('*')
+-      .eq('ride_id', id)
+-      .order('created_at', { ascending: true })
+-    if (!error) setReservations(data ?? [])
+-  }, [id])
+-
+-  const loadMessages = useCallback(async () => {
+-    const { data, error } = await supabase
+-      .from('messages')
+-      .select('*')
+-      .eq('ride_id', id)
+-      .order('timestamp', { ascending: true })
+-    if (!error) setMessages(data ?? [])
+-  }, [id])
+-
+-  // Chargement initial
+-  useEffect(() => {
+-    let active = true
+-    setLoading(true)
+-    Promise.all([loadRide(), loadReservations(), loadMessages()]).then(() => {
+-      if (active) setLoading(false)
+-    })
+-    return () => {
+-      active = false
+-    }
+-  }, [loadRide, loadReservations, loadMessages])
+-
+-  // Temps réel : trajet, réservations et messages
+-  useEffect(() => {
+-    const channel = supabase
+-      .channel(`ride-${id}`)
+-      .on(
+-        'postgres_changes',
+-        { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${id}` },
+-        loadRide,
+-      )
+-      .on(
+-        'postgres_changes',
+-        { event: '*', schema: 'public', table: 'reservations', filter: `ride_id=eq.${id}` },
+-        loadReservations,
+-      )
+-      .on(
+-        'postgres_changes',
+-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `ride_id=eq.${id}` },
+-        (payload) =>
+-          setMessages((prev) =>
+-            prev.some((m) => m.id === payload.new.id) ? prev : [...prev, payload.new],
+-          ),
+-      )
+-      .subscribe()
+-
+-    return () => supabase.removeChannel(channel)
+-  }, [id, loadRide, loadReservations])
++  const messagesQuery = useMessages(id, isMember)
++  const messages = messagesQuery.data ?? []
++  const driverQuery = useProfile(ride?.driver_id)
++  const driverProfile = driverQuery.data
++
++  const joinRide = useJoinRide()
++  const leaveRide = useLeaveRide()
++  const cancelRide = useCancelRide()
++  const cancelSeries = useCancelSeries()
++  const sendMessage = useSendMessage(id)
+ 
+-  // Profil du conducteur (prénom + formation)
+-  useEffect(() => {
+-    const driverId = ride?.driver_id
+-    if (!driverId) return
+-    let active = true
+-    supabase
+-      .from('profiles')
+-      .select('full_name, study')
+-      .eq('id', driverId)
+-      .maybeSingle()
+-      .then(({ data }) => {
+-        if (active) setDriverProfile(data)
+-      })
+-    return () => {
+-      active = false
+-    }
+-  }, [ride?.driver_id])
++  const [draft, setDraft] = useState('')
+ 
+   // Défilement automatique du chat
+   useEffect(() => {
+     bottomRef.current?.scrollIntoView({ block: 'nearest' })
+   }, [messages.length])
+ 
+-  async function joinRide() {
+-    setBusy(true)
+-    setError(null)
+-    const { error } = await supabase.rpc('join_ride', { p_ride_id: id })
+-    if (error) setError(error.message)
+-    else await Promise.all([loadRide(), loadReservations(), loadMessages()])
+-    setBusy(false)
+-  }
+-
+-  async function leaveRide() {
+-    setBusy(true)
+-    setError(null)
+-    const { error } = await supabase.rpc('leave_ride', { p_ride_id: id })
+-    if (error) {
+-      setError(error.message)
+-    } else {
+-      setMessages([])
+-      await Promise.all([loadRide(), loadReservations()])
+-    }
+-    setBusy(false)
++  const busy =
++    joinRide.isPending || leaveRide.isPending || cancelRide.isPending || cancelSeries.isPending
++  const actionError =
++    joinRide.error ??
++    leaveRide.error ??
++    cancelRide.error ??
++    cancelSeries.error ??
++    sendMessage.error ??
++    rideQuery.error ??
++    null
++
++  async function handleCancelRide() {
++    await cancelRide.mutateAsync(id)
++    navigate('/mes-trajets', { replace: true })
+   }
+ 
+-  async function cancelRide() {
+-    setBusy(true)
+-    setError(null)
+-    const { error } = await supabase.from('rides').delete().eq('id', id)
+-    if (error) {
+-      setError(error.message)
+-      setBusy(false)
+-    } else {
+-      navigate('/mes-trajets', { replace: true })
+-    }
++  async function handleCancelSeries() {
++    if (!window.confirm('Annuler tous les trajets à venir de cette série ?')) return
++    await cancelSeries.mutateAsync(id)
++    navigate('/mes-trajets', { replace: true })
+   }
+ 
+-  async function sendMessage(e) {
++  function handleSend(e) {
+     e.preventDefault()
+     const text = draft.trim()
+     if (!text) return
+-
+     setDraft('')
+-    const { error } = await supabase
+-      .from('messages')
+-      .insert({ ride_id: id, user_id: userId, text })
+-      .select()
+-      .single()
+-
+-    if (error) {
+-      setError(error.message)
+-      setDraft(text)
+-    }
++    sendMessage.mutate({ userId, text }, { onError: () => setDraft(text) })
+   }
+ 
+   function authorLabel(message) {
+@@ -182,7 +103,7 @@
+     return `Passager ${message.user_id.slice(0, 4)}`
+   }
+ 
+-  if (loading) {
++  if (rideQuery.isPending) {
+     return <p className="text-pine-700 p-8 text-sm">Chargement du trajet…</p>
+   }
+ 
+@@ -192,6 +113,7 @@
+         <button onClick={() => navigate('/trajets')} className="text-pine-700 mb-6 flex items-center gap-2 text-sm">
+           <ArrowLeft size={18} /> Retour
+         </button>
++        <OfflineNotice />
+         <p className="border-pine-100 text-pine-700 rounded-2xl border border-dashed p-6 text-center text-sm">
+           Ce trajet n'existe plus ou a été annulé.
+         </p>
+@@ -199,7 +121,9 @@
+     )
+   }
+ 
+-  const isPast = new Date(ride.time) < new Date()
++  const departure = new Date(ride.time)
++  const isPast = departure < new Date()
++  const canConfirm = isMember && isPast && new Date().getTime() - departure.getTime() < CONFIRM_WINDOW_MS
+ 
+   // Estimation du CO₂ économisé par personne (véhicule moyen « essence » par défaut)
+   const factor = VEHICLES.find((v) => v.id === DEFAULT_VEHICLE).factor
+@@ -222,6 +146,8 @@
+         <ArrowLeft size={18} /> Retour
+       </button>
+ 
++      <OfflineNotice />
++
+       <section className="border-pine-100 rounded-2xl border bg-white p-5">
+         <h1 className="text-xl leading-snug font-semibold">
+           {ride.origin} → {ride.destination}
+@@ -230,7 +156,7 @@
+         <ul className="text-pine-700 mt-4 space-y-2 text-sm">
+           <li className="flex items-center gap-2">
+             <Clock size={16} className="text-pine-500" />
+-            {dateFormat.format(new Date(ride.time))}
++            {dateFormat.format(departure)}
+           </li>
+           <li className="flex items-center gap-2">
+             <MapPin size={16} className="text-pine-500" />
+@@ -248,6 +174,12 @@
+               Rendez-vous : {ride.meeting_label}
+             </li>
+           )}
++          {ride.recurrence_group_id && (
++            <li className="flex items-center gap-2">
++              <Repeat size={16} className="text-pine-500" />
++              Trajet hebdomadaire
++            </li>
++          )}
+           {ecoSaving && (
+             <li className="flex items-start gap-2">
+               <Leaf size={16} className="text-pine-500 mt-0.5 shrink-0" />
+@@ -265,44 +197,63 @@
+           </div>
+         )}
+ 
+-        <p className="text-pine-500 mt-4 text-xs">
+-          {isDriver
+-            ? 'Vous êtes le conducteur'
+-            : `Conducteur : ${
+-                [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
+-                ride.driver_id.slice(0, 4)
+-              }`}
+-        </p>
++        <div className="mt-4 space-y-2">
++          <p className="text-pine-500 text-xs">
++            {isDriver
++              ? 'Vous êtes le conducteur'
++              : `Conducteur : ${
++                  [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
++                  ride.driver_id.slice(0, 4)
++                }`}
++          </p>
++          {driverQuery.isSuccess && (
++            <ReliabilityBadge
++              score={driverProfile?.reliability_score ?? 100}
++              totalRides={driverProfile?.total_scheduled_rides ?? 0}
++            />
++          )}
++        </div>
+ 
+-        <div className="mt-5">
++        <div className="mt-5 space-y-3">
+           {isPast ? (
+             <p className="bg-pine-100 rounded-xl px-4 py-3 text-sm">Ce trajet est terminé.</p>
+           ) : isDriver ? (
+-            <button
+-              onClick={cancelRide}
+-              disabled={busy}
+-              className="border-pine-100 w-full rounded-xl border py-3.5 font-medium disabled:opacity-50"
+-            >
+-              {busy ? 'Annulation…' : 'Annuler ce trajet'}
+-            </button>
++            <>
++              <button
++                onClick={handleCancelRide}
++                disabled={busy}
++                className="border-pine-100 w-full rounded-xl border py-3.5 font-medium disabled:opacity-50"
++              >
++                {cancelRide.isPending ? 'Annulation…' : 'Annuler ce trajet'}
++              </button>
++              {ride.recurrence_group_id && (
++                <button
++                  onClick={handleCancelSeries}
++                  disabled={busy}
++                  className="w-full rounded-xl border border-red-200 py-3.5 font-medium text-red-800 disabled:opacity-50"
++                >
++                  {cancelSeries.isPending ? 'Annulation…' : 'Annuler toute la série à venir'}
++                </button>
++              )}
++            </>
+           ) : myReservation ? (
+             <button
+-              onClick={leaveRide}
++              onClick={() => leaveRide.mutate(id)}
+               disabled={busy}
+               className="border-pine-100 flex w-full items-center justify-center gap-2 rounded-xl border py-3.5 font-medium disabled:opacity-50"
+             >
+               <LogOut size={18} />
+-              {busy ? 'Annulation…' : 'Quitter ce trajet'}
++              {leaveRide.isPending ? 'Annulation…' : 'Quitter ce trajet'}
+             </button>
+           ) : (
+             <button
+-              onClick={joinRide}
++              onClick={() => joinRide.mutate(id)}
+               disabled={busy || ride.seats < 1}
+               className="bg-pine-900 w-full rounded-xl py-3.5 font-medium text-white disabled:opacity-50"
+             >
+               {ride.seats < 1
+                 ? 'Complet'
+-                : busy
++                : joinRide.isPending
+                   ? 'Réservation…'
+                   : 'Rejoindre ce trajet'}
+             </button>
+@@ -310,10 +261,14 @@
+         </div>
+       </section>
+ 
+-      {error && (
+-        <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
++      {actionError && (
++        <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">
++          {actionError.message}
++        </p>
+       )}
+ 
++      {canConfirm && <AttendancePanel ride={ride} isDriver={isDriver} reservations={reservations} />}
++
+       <section className="mt-6">
+         <h2 className="mb-3 font-medium">Discussion</h2>
+ 
+@@ -350,7 +305,7 @@
+               <div ref={bottomRef} />
+             </div>
+ 
+-            <form onSubmit={sendMessage} className="mt-3 flex gap-2">
++            <form onSubmit={handleSend} className="mt-3 flex gap-2">
+               <input
+                 value={draft}
+                 onChange={(e) => setDraft(e.target.value)}
+diff -ruN '--exclude=package-lock.json' a/src/src/hooks/useCachedRides.js b/src/src/hooks/useCachedRides.js
+--- a/src/src/hooks/useCachedRides.js	2026-10-27 20:32:08.000000000 +0100
++++ b/src/src/hooks/useCachedRides.js	1970-01-01 01:00:00.000000000 +0100
+@@ -1,37 +0,0 @@
+-// src/hooks/useCachedRides.js
+-import { useState, useEffect } from 'react';
+-import { supabase } from '../lib/supabase';
+-
+-export function useCachedRides() {
+-  const [rides, setRides] = useState(() => {
+-    const cached = localStorage.getItem('cached_rides');
+-    return cached ? JSON.parse(cached) : [];
+-  });
+-  const [loading, setLoading] = useState(!rides.length);
+-
+-  useEffect(() => {
+-    async function fetchRides() {
+-      try {
+-        const { data, error } = await supabase
+-          .from('rides')
+-          .select('*, driver:profiles!driver_id(full_name, reliability_score)')
+-          .gt('available_seats', 0)
+-          .gte('departure_time', new Date().toISOString())
+-          .order('departure_time', { ascending: true });
+-
+-        if (error) throw error;
+-        if (data) {
+-          setRides(data);
+-          localStorage.setItem('cached_rides', JSON.stringify(data));
+-        }
+-      } catch (err) {
+-        console.warn('Mode hors-ligne : utilisation du cache local.', err);
+-      } finally {
+-        setLoading(false);
+-      }
+-    }
+-    fetchRides();
+-  }, []);
+-
+-  return { rides, loading };
+-}
+diff -ruN '--exclude=package-lock.json' a/supabase/functions/send-push/index.ts b/supabase/functions/send-push/index.ts
+--- a/supabase/functions/send-push/index.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/supabase/functions/send-push/index.ts	2026-10-28 20:40:58.000000000 +0100
+@@ -0,0 +1,159 @@
++// Edge Function « send-push » : envoie une notification Web Push quand
++//   · un message est posté dans le chat d'un trajet  (table messages, INSERT)
++//   · un passager rejoint un trajet                  (table reservations, INSERT)
++//   · un passager quitte un trajet                   (table reservations, DELETE)
++//
++// Elle est appelée par des Database Webhooks Supabase (voir docs/INTEGRATION_V3.md).
++// Secrets requis : VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, WEBHOOK_SECRET
++// (SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY sont fournis automatiquement.)
++import { createClient } from 'npm:@supabase/supabase-js@2'
++import webpush from 'npm:web-push@3.6.7'
++
++const supabase = createClient(
++  Deno.env.get('SUPABASE_URL')!,
++  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
++)
++
++webpush.setVapidDetails(
++  Deno.env.get('VAPID_SUBJECT')!, // ex. mailto:vous@etu.univ-poitiers.fr
++  Deno.env.get('VAPID_PUBLIC_KEY')!,
++  Deno.env.get('VAPID_PRIVATE_KEY')!,
++)
++
++type WebhookPayload = {
++  type: 'INSERT' | 'UPDATE' | 'DELETE'
++  table: string
++  record: Record<string, any> | null
++  old_record: Record<string, any> | null
++}
++
++type Notification = { userIds: string[]; title: string; body: string; url: string; tag: string }
++
++const json = (body: unknown, status = 200) =>
++  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
++
++// Comparaison en temps constant du secret partagé avec le webhook
++function secretMatches(received: string | null): boolean {
++  const expected = Deno.env.get('WEBHOOK_SECRET') ?? ''
++  if (!received || !expected || received.length !== expected.length) return false
++  let diff = 0
++  for (let i = 0; i < expected.length; i++) diff |= received.charCodeAt(i) ^ expected.charCodeAt(i)
++  return diff === 0
++}
++
++const shorten = (text: string, max = 110) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
++
++async function displayName(userId: string, fallback: string): Promise<string> {
++  const { data } = await supabase.from('profiles').select('full_name').eq('id', userId).maybeSingle()
++  return data?.full_name || fallback
++}
++
++async function getRide(rideId: string) {
++  const { data } = await supabase
++    .from('rides')
++    .select('id, driver_id, origin, destination')
++    .eq('id', rideId)
++    .maybeSingle()
++  return data
++}
++
++// Décide qui prévenir, et avec quel texte
++async function buildNotification(payload: WebhookPayload): Promise<Notification | null> {
++  // ----- Nouveau message : tous les membres du trajet sauf l'auteur -----
++  if (payload.table === 'messages' && payload.type === 'INSERT' && payload.record) {
++    const { ride_id, user_id, text } = payload.record
++    const ride = await getRide(ride_id)
++    if (!ride) return null
++
++    const { data: passengers } = await supabase.from('reservations').select('user_id').eq('ride_id', ride_id)
++    const members = new Set<string>([ride.driver_id, ...(passengers ?? []).map((p) => p.user_id)])
++    members.delete(user_id)
++
++    const author = await displayName(
++      user_id,
++      user_id === ride.driver_id ? 'Le conducteur' : 'Un passager',
++    )
++    return {
++      userIds: [...members],
++      title: `${author} · ${ride.origin} → ${ride.destination}`,
++      body: shorten(String(text)),
++      url: `/trajets/${ride_id}`,
++      tag: `ride-${ride_id}`, // les messages d'un même trajet se remplacent au lieu de s'empiler
++    }
++  }
++
++  // ----- Passager qui rejoint / quitte : on prévient le conducteur -----
++  if (payload.table === 'reservations' && (payload.type === 'INSERT' || payload.type === 'DELETE')) {
++    const row = payload.type === 'INSERT' ? payload.record : payload.old_record
++    if (!row) return null
++
++    const ride = await getRide(row.ride_id)
++    if (!ride) return null // trajet supprimé : les réservations partent avec lui (cascade)
++
++    const passenger = await displayName(row.user_id, 'Un passager')
++    const joined = payload.type === 'INSERT'
++    return {
++      userIds: [ride.driver_id],
++      title: joined ? 'Nouveau passager' : 'Un passager a quitté votre trajet',
++      body: `${passenger} ${joined ? 'a rejoint' : 'a quitté'} ${ride.origin} → ${ride.destination}`,
++      url: `/trajets/${ride.id}`,
++      tag: `ride-${ride.id}-passengers`,
++    }
++  }
++
++  return null
++}
++
++Deno.serve(async (req) => {
++  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
++  if (!secretMatches(req.headers.get('x-webhook-secret'))) return json({ error: 'Unauthorized' }, 401)
++
++  let payload: WebhookPayload
++  try {
++    payload = await req.json()
++  } catch {
++    return json({ error: 'Invalid JSON' }, 400)
++  }
++
++  const notification = await buildNotification(payload)
++  if (!notification || notification.userIds.length === 0) return json({ sent: 0 })
++
++  const { data: subscriptions, error } = await supabase
++    .from('push_subscriptions')
++    .select('id, endpoint, p256dh, auth_key')
++    .in('user_id', notification.userIds)
++
++  if (error) return json({ error: error.message }, 500)
++
++  const message = JSON.stringify({
++    title: notification.title,
++    body: notification.body,
++    url: notification.url,
++    tag: notification.tag,
++  })
++
++  let sent = 0
++  const expired: string[] = []
++
++  await Promise.all(
++    (subscriptions ?? []).map(async (sub) => {
++      try {
++        await webpush.sendNotification(
++          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
++          message,
++          { TTL: 60 * 60 * 24 }, // un message non distribué sous 24 h est abandonné
++        )
++        sent++
++      } catch (err) {
++        // 404 / 410 : l'abonnement n'existe plus (appli désinstallée, permission retirée)
++        const status = (err as { statusCode?: number }).statusCode
++        if (status === 404 || status === 410) expired.push(sub.id)
++        else console.error('Échec push', status, (err as Error).message)
++      }
++    }),
++  )
++
++  if (expired.length > 0) await supabase.from('push_subscriptions').delete().in('id', expired)
++
++  return json({ sent, removed: expired.length })
++})
+diff -ruN '--exclude=package-lock.json' a/supabase_migration_v3.sql b/supabase_migration_v3.sql
+--- a/supabase_migration_v3.sql	1970-01-01 01:00:00.000000000 +0100
++++ b/supabase_migration_v3.sql	2026-10-28 09:08:56.000000000 +0100
+@@ -0,0 +1,493 @@
++-- ============================================================
++-- Campus en Mouvement — migration v3
++--   · trajets récurrents (emploi du temps)
++--   · score de fiabilité / ponctualité
++--   · inscription réservée aux adresses de l'Université de Poitiers
++--   · notifications Web Push (abonnements)
++--
++-- À coller dans Supabase > SQL Editor > New query > Run.
++-- Idempotent : peut être relancé plusieurs fois sans rien casser.
++--
++-- Prérequis déjà exécutés : supabase_schema.sql, supabase_schema_v2.sql
++-- (reservations, messages, join_ride, leave_ride) et supabase_migration_v2.sql
++-- (colonnes géo de rides + table profiles).
++--
++-- Convention du projet : rides.seats = nombre de places RESTANTES
++-- (join_ride le décrémente, leave_ride l'incrémente). La colonne
++-- « available_seats » de votre premier brouillon n'est donc pas utilisée.
++-- ============================================================
++
++
++-- ------------------------------------------------------------
++-- 0. Retrait de vos premières fonctions (failles de sécurité)
++--    · create_recurring_rides(p_driver_id …) : n'importe qui pouvait publier
++--      des trajets au nom d'un autre utilisateur, sans limite de durée.
++--    · record_user_attendance(p_user_id, p_attended) : n'importe qui pouvait
++--      fixer le score de n'importe qui.
++--    Elles sont remplacées plus bas par des versions qui lisent auth.uid().
++-- ------------------------------------------------------------
++drop function if exists public.create_recurring_rides(
++  uuid, text, text,
++  double precision, double precision, double precision, double precision,
++  text, double precision, double precision,
++  date, date, time, integer[], integer, integer, jsonb
++);
++drop function if exists public.record_user_attendance(uuid, boolean);
++
++
++-- ------------------------------------------------------------
++-- 1. Colonnes
++-- ------------------------------------------------------------
++alter table public.rides
++  add column if not exists recurrence_group_id uuid;
++
++create index if not exists rides_recurrence_group_idx
++  on public.rides (recurrence_group_id)
++  where recurrence_group_id is not null;
++
++alter table public.profiles
++  add column if not exists completed_rides_count integer not null default 0,
++  add column if not exists total_scheduled_rides integer not null default 0,
++  add column if not exists reliability_score     numeric(5,2) not null default 100.00;
++
++
++-- ------------------------------------------------------------
++-- 2. Profils : le score n'est modifiable que par le serveur
++--    (sans ça, la policy « profiles_update_own » laisserait chacun
++--    s'attribuer 100 % de fiabilité depuis la console du navigateur).
++-- ------------------------------------------------------------
++revoke insert, update on public.profiles from anon, authenticated;
++grant  insert (id, full_name, study, updated_at) on public.profiles to authenticated;
++grant  update (id, full_name, study, updated_at) on public.profiles to authenticated;
++
++
++-- ------------------------------------------------------------
++-- 3. Trajets : on ne peut plus supprimer un trajet déjà parti
++--    (sinon un conducteur absent effacerait le trajet avant que
++--    les passagers ne le signalent).
++-- ------------------------------------------------------------
++drop policy if exists "rides_delete_own" on public.rides;
++create policy "rides_delete_own"
++  on public.rides for delete
++  to authenticated
++  using (auth.uid() = driver_id and time > now());
++
++
++-- ------------------------------------------------------------
++-- 4. leave_ride : impossible de quitter un trajet déjà passé
++--    (un passager absent ne doit pas pouvoir effacer sa réservation
++--    avant que le conducteur ne le signale).
++-- ------------------------------------------------------------
++create or replace function public.leave_ride(p_ride_id uuid)
++returns public.rides
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_ride    public.rides;
++  v_deleted int;
++begin
++  if auth.uid() is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  select * into v_ride from public.rides where id = p_ride_id for update;
++
++  if not found then
++    raise exception 'Trajet introuvable';
++  end if;
++
++  if v_ride.time < now() then
++    raise exception 'Ce trajet est déjà passé';
++  end if;
++
++  delete from public.reservations
++   where ride_id = p_ride_id and user_id = auth.uid();
++
++  get diagnostics v_deleted = row_count;
++
++  if v_deleted = 0 then
++    raise exception 'Aucune réservation à annuler';
++  end if;
++
++  update public.rides
++     set seats = seats + 1
++   where id = p_ride_id
++  returning * into v_ride;
++
++  return v_ride;
++end;
++$$;
++
++
++-- ------------------------------------------------------------
++-- 5. Trajets récurrents
++--    Le conducteur est TOUJOURS l'utilisateur connecté (auth.uid()).
++--    Jours : format ISO, 1 = lundi … 7 = dimanche.
++--    Garde-fous : 180 jours maximum, occurrences passées ignorées.
++-- ------------------------------------------------------------
++create or replace function public.create_recurring_rides(
++  p_origin         text,
++  p_destination    text,
++  p_origin_lat     double precision,
++  p_origin_lng     double precision,
++  p_dest_lat       double precision,
++  p_dest_lng       double precision,
++  p_meeting_label  text,
++  p_meeting_lat    double precision,
++  p_meeting_lng    double precision,
++  p_start_date     date,
++  p_end_date       date,
++  p_time           time,
++  p_days_of_week   integer[],
++  p_seats          integer,
++  p_distance_m     integer default null,
++  p_route          jsonb   default null
++) returns integer
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_me    uuid := auth.uid();
++  v_day   date := p_start_date;
++  v_group uuid := gen_random_uuid();
++  v_count integer := 0;
++  v_ts    timestamptz;
++begin
++  if v_me is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  if p_origin is null or char_length(trim(p_origin)) not between 2 and 120
++     or p_destination is null or char_length(trim(p_destination)) not between 2 and 120 then
++    raise exception 'Départ et arrivée doivent faire entre 2 et 120 caractères.';
++  end if;
++
++  if p_seats is null or p_seats not between 1 and 8 then
++    raise exception 'Le nombre de places doit être compris entre 1 et 8.';
++  end if;
++
++  if p_start_date is null or p_end_date is null or p_time is null then
++    raise exception 'Dates et heure obligatoires.';
++  end if;
++
++  if p_end_date < p_start_date then
++    raise exception 'La date de fin doit être postérieure à la date de début.';
++  end if;
++
++  if p_end_date - p_start_date > 180 then
++    raise exception 'La récurrence est limitée à 6 mois.';
++  end if;
++
++  if p_days_of_week is null
++     or cardinality(p_days_of_week) = 0
++     or exists (select 1 from unnest(p_days_of_week) as d where d not between 1 and 7) then
++    raise exception 'Choisissez au moins un jour de la semaine.';
++  end if;
++
++  while v_day <= p_end_date loop
++    if extract(isodow from v_day)::integer = any (p_days_of_week) then
++      -- Heure locale de Poitiers, gérée correctement lors du changement d'heure
++      v_ts := (v_day + p_time) at time zone 'Europe/Paris';
++
++      if v_ts > now() then
++        insert into public.rides (
++          driver_id, origin, destination,
++          origin_lat, origin_lng, dest_lat, dest_lng,
++          meeting_label, meeting_lat, meeting_lng,
++          time, seats, distance_m, route, recurrence_group_id
++        ) values (
++          v_me, trim(p_origin), trim(p_destination),
++          p_origin_lat, p_origin_lng, p_dest_lat, p_dest_lng,
++          nullif(trim(p_meeting_label), ''), p_meeting_lat, p_meeting_lng,
++          v_ts, p_seats, p_distance_m, p_route, v_group
++        );
++        v_count := v_count + 1;
++      end if;
++    end if;
++    v_day := v_day + 1;
++  end loop;
++
++  return v_count;
++end;
++$$;
++
++-- Annule toutes les occurrences À VENIR de la série d'un trajet.
++-- (« security invoker » : la policy rides_delete_own s'applique.)
++create or replace function public.cancel_ride_series(p_ride_id uuid)
++returns integer
++language plpgsql
++set search_path = public
++as $$
++declare
++  v_group   uuid;
++  v_deleted integer;
++begin
++  select recurrence_group_id into v_group
++    from public.rides
++   where id = p_ride_id and driver_id = auth.uid();
++
++  if v_group is null then
++    raise exception 'Ce trajet ne fait pas partie d''une série que vous conduisez.';
++  end if;
++
++  delete from public.rides
++   where recurrence_group_id = v_group
++     and driver_id = auth.uid()
++     and time > now();
++
++  get diagnostics v_deleted = row_count;
++  return v_deleted;
++end;
++$$;
++
++
++-- ------------------------------------------------------------
++-- 6. Fiabilité / ponctualité
++--    Après le départ, les participants se confirment mutuellement :
++--      · le conducteur signale chaque passager présent / absent ;
++--      · chaque passager signale si le conducteur était au rendez-vous.
++--    Personne ne peut s'attribuer de points à lui-même.
++--    Le score est RECALCULÉ à partir des signalements (jamais incrémenté
++--    à la main) : rejouer ou corriger un signalement ne fausse rien.
++-- ------------------------------------------------------------
++create table if not exists public.ride_attendance (
++  ride_id     uuid not null,   -- pas de FK : l'historique survit à la purge des vieux trajets
++  user_id     uuid not null references auth.users (id) on delete cascade,  -- personne évaluée
++  reporter_id uuid not null references auth.users (id) on delete cascade,  -- personne qui signale
++  attended    boolean not null,
++  created_at  timestamptz not null default now(),
++  primary key (ride_id, user_id, reporter_id),
++  check (user_id <> reporter_id)
++);
++
++create index if not exists ride_attendance_user_idx on public.ride_attendance (user_id);
++
++alter table public.ride_attendance enable row level security;
++
++-- Chacun voit seulement ses propres signalements (pas qui l'a signalé).
++-- Aucune policy d'écriture : tout passe par report_attendance().
++drop policy if exists "attendance_select_own_reports" on public.ride_attendance;
++create policy "attendance_select_own_reports"
++  on public.ride_attendance for select
++  to authenticated
++  using (reporter_id = auth.uid());
++
++-- Recalcul interne (non appelable depuis l'application)
++create or replace function public.refresh_reliability(p_user_id uuid)
++returns void
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_total integer;
++  v_ok    integer;
++begin
++  -- Un trajet est « honoré » si les signalements positifs égalent ou dépassent les négatifs
++  with per_ride as (
++    select ride_id,
++           sum(case when attended then 1 else -1 end) as balance
++      from public.ride_attendance
++     where user_id = p_user_id
++     group by ride_id
++  )
++  select count(*), count(*) filter (where balance >= 0)
++    into v_total, v_ok
++    from per_ride;
++
++  insert into public.profiles (id, completed_rides_count, total_scheduled_rides, reliability_score)
++  values (
++    p_user_id, v_ok, v_total,
++    case when v_total = 0 then 100 else round(100.0 * v_ok / v_total, 1) end
++  )
++  on conflict (id) do update set
++    completed_rides_count = excluded.completed_rides_count,
++    total_scheduled_rides = excluded.total_scheduled_rides,
++    reliability_score     = excluded.reliability_score;
++end;
++$$;
++
++create or replace function public.report_attendance(
++  p_ride_id  uuid,
++  p_user_id  uuid,
++  p_attended boolean
++) returns void
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_me      uuid := auth.uid();
++  v_ride    public.rides;
++  v_allowed boolean;
++begin
++  if v_me is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  if p_user_id = v_me then
++    raise exception 'Vous ne pouvez pas confirmer votre propre présence.';
++  end if;
++
++  select * into v_ride from public.rides where id = p_ride_id;
++
++  if not found then
++    raise exception 'Trajet introuvable';
++  end if;
++
++  if v_ride.time > now() then
++    raise exception 'Ce trajet n''a pas encore eu lieu.';
++  end if;
++
++  if v_ride.time < now() - interval '7 days' then
++    raise exception 'Le délai de confirmation (7 jours) est dépassé.';
++  end if;
++
++  v_allowed :=
++    -- le conducteur évalue l'un de ses passagers
++    (v_ride.driver_id = v_me and exists (
++       select 1 from public.reservations r
++        where r.ride_id = p_ride_id and r.user_id = p_user_id))
++    or
++    -- un passager évalue le conducteur
++    (p_user_id = v_ride.driver_id and exists (
++       select 1 from public.reservations r
++        where r.ride_id = p_ride_id and r.user_id = v_me));
++
++  if not v_allowed then
++    raise exception 'Vous ne pouvez pas évaluer cette personne pour ce trajet.';
++  end if;
++
++  insert into public.ride_attendance (ride_id, user_id, reporter_id, attended)
++  values (p_ride_id, p_user_id, v_me, p_attended)
++  on conflict (ride_id, user_id, reporter_id)
++  do update set attended = excluded.attended, created_at = now();
++
++  perform public.refresh_reliability(p_user_id);
++end;
++$$;
++
++
++-- ------------------------------------------------------------
++-- 7. Inscription réservée à l'Université de Poitiers
++--    Rejette toute création de compte (ou changement d'e-mail) hors de
++--    @etu.univ-poitiers.fr / @univ-poitiers.fr. Les comptes existants
++--    (autres domaines) continuent de pouvoir se connecter.
++--    ⚠️ Dans Authentication > Providers > Email, laissez « Confirm email »
++--    activé : sinon on pourrait s'inscrire avec l'adresse d'un autre.
++--    Pour créer un compte de test hors domaine : drop trigger enforce_univ_email on auth.users;
++-- ------------------------------------------------------------
++create or replace function public.enforce_univ_email()
++returns trigger
++language plpgsql
++set search_path = ''
++as $$
++begin
++  -- Mise à jour qui ne touche pas à l'adresse : on laisse passer
++  if tg_op = 'UPDATE' and new.email is not distinct from old.email then
++    return new;
++  end if;
++
++  if new.email is null
++     or lower(new.email) !~ '^[^@\s]+@(etu\.)?univ-poitiers\.fr$' then
++    raise exception 'Inscription réservée aux adresses @etu.univ-poitiers.fr et @univ-poitiers.fr'
++      using errcode = 'check_violation';
++  end if;
++
++  return new;
++end;
++$$;
++
++drop trigger if exists enforce_univ_email on auth.users;
++create trigger enforce_univ_email
++  before insert or update of email on auth.users
++  for each row execute function public.enforce_univ_email();
++
++
++-- ------------------------------------------------------------
++-- 8. Notifications Web Push : abonnements des appareils
++-- ------------------------------------------------------------
++create table if not exists public.push_subscriptions (
++  id         uuid primary key default gen_random_uuid(),
++  user_id    uuid not null references auth.users (id) on delete cascade,
++  endpoint   text not null unique,
++  p256dh     text not null,
++  auth_key   text not null,
++  user_agent text,
++  created_at timestamptz not null default now()
++);
++
++create index if not exists push_subscriptions_user_idx on public.push_subscriptions (user_id);
++
++alter table public.push_subscriptions enable row level security;
++
++drop policy if exists "push_select_own" on public.push_subscriptions;
++create policy "push_select_own"
++  on public.push_subscriptions for select
++  to authenticated
++  using (user_id = auth.uid());
++
++drop policy if exists "push_delete_own" on public.push_subscriptions;
++create policy "push_delete_own"
++  on public.push_subscriptions for delete
++  to authenticated
++  using (user_id = auth.uid());
++
++-- Enregistrement via RPC : si l'appareil était lié à un autre compte
++-- (téléphone partagé), l'abonnement change de propriétaire.
++create or replace function public.register_push_subscription(
++  p_endpoint   text,
++  p_p256dh     text,
++  p_auth_key   text,
++  p_user_agent text default null
++) returns void
++language plpgsql
++security definer
++set search_path = public
++as $$
++begin
++  if auth.uid() is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  if p_endpoint is null or p_endpoint !~ '^https://' then
++    raise exception 'Abonnement invalide';
++  end if;
++
++  insert into public.push_subscriptions (user_id, endpoint, p256dh, auth_key, user_agent)
++  values (auth.uid(), p_endpoint, p_p256dh, p_auth_key, left(p_user_agent, 200))
++  on conflict (endpoint) do update set
++    user_id    = auth.uid(),
++    p256dh     = excluded.p256dh,
++    auth_key   = excluded.auth_key,
++    user_agent = excluded.user_agent,
++    created_at = now();
++end;
++$$;
++
++
++-- ------------------------------------------------------------
++-- 9. Droits d'exécution : seuls les utilisateurs connectés appellent les RPC
++--    (par défaut Postgres donne EXECUTE à tout le monde, anonymes compris)
++-- ------------------------------------------------------------
++revoke execute on function public.refresh_reliability(uuid)                          from public, anon, authenticated;
++revoke execute on function public.report_attendance(uuid, uuid, boolean)            from public, anon;
++revoke execute on function public.leave_ride(uuid)                                   from public, anon;
++revoke execute on function public.cancel_ride_series(uuid)                           from public, anon;
++revoke execute on function public.register_push_subscription(text, text, text, text) from public, anon;
++revoke execute on function public.create_recurring_rides(
++  text, text, double precision, double precision, double precision, double precision,
++  text, double precision, double precision, date, date, time, integer[], integer, integer, jsonb
++) from public, anon;
++
++grant execute on function public.report_attendance(uuid, uuid, boolean)             to authenticated;
++grant execute on function public.leave_ride(uuid)                                    to authenticated;
++grant execute on function public.cancel_ride_series(uuid)                            to authenticated;
++grant execute on function public.register_push_subscription(text, text, text, text) to authenticated;
++grant execute on function public.create_recurring_rides(
++  text, text, double precision, double precision, double precision, double precision,
++  text, double precision, double precision, date, date, time, integer[], integer, integer, jsonb
++) to authenticated;
+diff -ruN '--exclude=package-lock.json' a/supabase_migration_v3_postgis.sql b/supabase_migration_v3_postgis.sql
+--- a/supabase_migration_v3_postgis.sql	1970-01-01 01:00:00.000000000 +0100
++++ b/supabase_migration_v3_postgis.sql	2026-10-28 09:08:56.000000000 +0100
+@@ -0,0 +1,46 @@
++-- ============================================================
++-- Campus en Mouvement — migration v3 (OPTIONNELLE) : recherche par rayon PostGIS
++--
++-- À exécuter APRÈS supabase_migration_v3.sql. Séparée exprès : si PostGIS
++-- n'est pas activable sur votre projet, le reste de l'application fonctionne.
++--
++-- Utilité : la recherche de l'écran d'accueil est faite côté navigateur sur le
++-- TRACÉ complet des trajets (plus précis). Cette fonction est la version
++-- serveur, sur le point de DÉPART uniquement : utile le jour où il y aura trop
++-- de trajets pour tout charger.
++--   select * from search_rides_within_radius(46.5821, 0.3340, 1500);
++-- ============================================================
++
++create extension if not exists postgis with schema extensions;
++
++-- Index géographique (accélère ST_DWithin sur le point de départ)
++create index if not exists rides_origin_geog_idx
++  on public.rides
++  using gist ((st_setsrid(st_makepoint(origin_lng, origin_lat), 4326)::geography))
++  where origin_lat is not null and origin_lng is not null;
++
++create or replace function public.search_rides_within_radius(
++  p_lat           double precision,
++  p_lng           double precision,
++  p_radius_meters double precision default 1500
++) returns setof public.rides
++language sql
++stable
++set search_path = public, extensions
++as $$
++  select *
++    from public.rides
++   where seats > 0                       -- seats = places restantes
++     and time > now()
++     and origin_lat is not null
++     and origin_lng is not null
++     and st_dwithin(
++           st_setsrid(st_makepoint(origin_lng, origin_lat), 4326)::geography,
++           st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography,
++           p_radius_meters
++         )
++   order by time asc;
++$$;
++
++revoke execute on function public.search_rides_within_radius(double precision, double precision, double precision) from public, anon;
++grant  execute on function public.search_rides_within_radius(double precision, double precision, double precision) to authenticated;
+diff -ruN '--exclude=package-lock.json' a/supabase_schema_v2.sql b/supabase_schema_v2.sql
+--- a/supabase_schema_v2.sql	1970-01-01 01:00:00.000000000 +0100
++++ b/supabase_schema_v2.sql	2026-10-28 20:42:46.000000000 +0100
+@@ -0,0 +1,222 @@
++-- ============================================================
++-- Campus en Mouvement — v2 : réservations + chat
++-- À exécuter après supabase_schema.sql (table `rides`)
++-- Supabase > SQL Editor > New query > Run
++-- ============================================================
++
++-- ------------------------------------------------------------
++-- 1. Tables
++-- ------------------------------------------------------------
++create table if not exists public.reservations (
++  id         uuid primary key default gen_random_uuid(),
++  ride_id    uuid not null references public.rides (id) on delete cascade,
++  user_id    uuid not null references auth.users (id) on delete cascade,
++  created_at timestamptz not null default now(),
++  unique (ride_id, user_id)
++);
++
++create index if not exists reservations_ride_idx on public.reservations (ride_id);
++create index if not exists reservations_user_idx on public.reservations (user_id);
++
++create table if not exists public.messages (
++  id          uuid primary key default gen_random_uuid(),
++  ride_id     uuid not null references public.rides (id) on delete cascade,
++  user_id     uuid not null references auth.users (id) on delete cascade,
++  text        text not null check (char_length(trim(text)) between 1 and 1000),
++  "timestamp" timestamptz not null default now()
++);
++
++create index if not exists messages_ride_time_idx on public.messages (ride_id, "timestamp");
++
++-- ------------------------------------------------------------
++-- 2. Fonction d'appartenance (SECURITY DEFINER pour éviter
++--    toute récursion de policy entre messages et reservations)
++-- ------------------------------------------------------------
++create or replace function public.is_ride_member(p_ride_id uuid)
++returns boolean
++language sql
++stable
++security definer
++set search_path = public
++as $$
++  select exists (
++    select 1 from public.rides r
++    where r.id = p_ride_id and r.driver_id = auth.uid()
++  ) or exists (
++    select 1 from public.reservations res
++    where res.ride_id = p_ride_id and res.user_id = auth.uid()
++  );
++$$;
++
++grant execute on function public.is_ride_member(uuid) to authenticated;
++
++-- ------------------------------------------------------------
++-- 3. RLS — reservations
++-- ------------------------------------------------------------
++alter table public.reservations enable row level security;
++
++-- Lecture : ses propres réservations + celles des trajets qu'on conduit
++drop policy if exists "reservations_select" on public.reservations;
++create policy "reservations_select"
++  on public.reservations for select
++  to authenticated
++  using (
++    user_id = auth.uid()
++    or exists (
++      select 1 from public.rides r
++      where r.id = reservations.ride_id and r.driver_id = auth.uid()
++    )
++  );
++
++-- Création : uniquement pour soi-même, et pas sur son propre trajet
++drop policy if exists "reservations_insert_own" on public.reservations;
++create policy "reservations_insert_own"
++  on public.reservations for insert
++  to authenticated
++  with check (
++    user_id = auth.uid()
++    and not exists (
++      select 1 from public.rides r
++      where r.id = reservations.ride_id and r.driver_id = auth.uid()
++    )
++  );
++
++-- Annulation : sa propre réservation, ou le conducteur qui retire un passager
++drop policy if exists "reservations_delete" on public.reservations;
++create policy "reservations_delete"
++  on public.reservations for delete
++  to authenticated
++  using (
++    user_id = auth.uid()
++    or exists (
++      select 1 from public.rides r
++      where r.id = reservations.ride_id and r.driver_id = auth.uid()
++    )
++  );
++
++-- ------------------------------------------------------------
++-- 4. RLS — messages (chat réservé aux membres du trajet)
++-- ------------------------------------------------------------
++alter table public.messages enable row level security;
++
++drop policy if exists "messages_select_members" on public.messages;
++create policy "messages_select_members"
++  on public.messages for select
++  to authenticated
++  using (public.is_ride_member(ride_id));
++
++drop policy if exists "messages_insert_members" on public.messages;
++create policy "messages_insert_members"
++  on public.messages for insert
++  to authenticated
++  with check (user_id = auth.uid() and public.is_ride_member(ride_id));
++
++drop policy if exists "messages_delete_own" on public.messages;
++create policy "messages_delete_own"
++  on public.messages for delete
++  to authenticated
++  using (user_id = auth.uid());
++
++-- ------------------------------------------------------------
++-- 5. Rejoindre / quitter un trajet de façon atomique
++--    (les RLS de `rides` n'autorisent l'UPDATE qu'au conducteur :
++--     ces fonctions SECURITY DEFINER décrémentent les places)
++-- ------------------------------------------------------------
++create or replace function public.join_ride(p_ride_id uuid)
++returns public.rides
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_ride public.rides;
++begin
++  if auth.uid() is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  select * into v_ride from public.rides where id = p_ride_id for update;
++
++  if not found then
++    raise exception 'Trajet introuvable';
++  end if;
++
++  if v_ride.driver_id = auth.uid() then
++    raise exception 'Vous conduisez déjà ce trajet';
++  end if;
++
++  if v_ride.time < now() then
++    raise exception 'Ce trajet est déjà passé';
++  end if;
++
++  if exists (
++    select 1 from public.reservations
++    where ride_id = p_ride_id and user_id = auth.uid()
++  ) then
++    raise exception 'Vous avez déjà rejoint ce trajet';
++  end if;
++
++  if v_ride.seats < 1 then
++    raise exception 'Plus de place disponible';
++  end if;
++
++  insert into public.reservations (ride_id, user_id)
++  values (p_ride_id, auth.uid());
++
++  update public.rides
++     set seats = seats - 1
++   where id = p_ride_id
++  returning * into v_ride;
++
++  return v_ride;
++end;
++$$;
++
++create or replace function public.leave_ride(p_ride_id uuid)
++returns public.rides
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_ride    public.rides;
++  v_deleted int;
++begin
++  if auth.uid() is null then
++    raise exception 'Authentification requise';
++  end if;
++
++  select * into v_ride from public.rides where id = p_ride_id for update;
++
++  if not found then
++    raise exception 'Trajet introuvable';
++  end if;
++
++  delete from public.reservations
++   where ride_id = p_ride_id and user_id = auth.uid();
++
++  get diagnostics v_deleted = row_count;
++
++  if v_deleted = 0 then
++    raise exception 'Aucune réservation à annuler';
++  end if;
++
++  update public.rides
++     set seats = seats + 1
++   where id = p_ride_id
++  returning * into v_ride;
++
++  return v_ride;
++end;
++$$;
++
++grant execute on function public.join_ride(uuid)  to authenticated;
++grant execute on function public.leave_ride(uuid) to authenticated;
++
++-- ------------------------------------------------------------
++-- 6. Realtime (chat instantané + compteur de places)
++-- ------------------------------------------------------------
++alter publication supabase_realtime add table public.messages;
++alter publication supabase_realtime add table public.reservations;
++-- `rides` a déjà été ajoutée en v1 ; sinon :
++-- alter publication supabase_realtime add table public.rides;
+diff -ruN '--exclude=package-lock.json' a/vite.config.js b/vite.config.js
+--- a/vite.config.js	2026-10-27 20:32:08.000000000 +0100
++++ b/vite.config.js	2026-10-28 20:40:39.000000000 +0100
+@@ -26,19 +26,33 @@
+         ],
+       },
+       workbox: {
+-// Dans vite.config.js sous workbox :
+-runtimeCaching: [
+-  {
+-    urlPattern: /^https:\/\/.*\.supabase\.co\/rest\/v1\/.*/i,
+-    handler: 'NetworkFirst',
+-    options: { cacheName: 'supabase-cache' }
+-  },
+-  {
+-    urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+-    handler: 'CacheFirst',
+-    options: { cacheName: 'map-tiles-cache' }
+-  }
+-]
++        // Notifications push : public/push-sw.js est chargé dans le service worker généré
++        importScripts: ['push-sw.js'],
++        cleanupOutdatedCaches: true,
++        runtimeCaching: [
++          {
++            // Lecture hors-ligne des données personnelles : trajets, réservations, messages, profils.
++            // NetworkFirst : réseau d'abord (données fraîches), cache si le réseau échoue ou dépasse 4 s.
++            // Seules les requêtes GET sont mises en cache (les écritures et RPC ne le sont jamais).
++            // Ce cache est vidé à la déconnexion (voir App.jsx).
++            urlPattern: /^https:\/\/[^/]+\.supabase\.co\/rest\/v1\/(rides|reservations|messages|profiles)(\?|\/|$)/i,
++            handler: 'NetworkFirst',
++            options: {
++              cacheName: 'supabase-cache',
++              networkTimeoutSeconds: 4,
++              expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 },
++              cacheableResponse: { statuses: [200] },
++            },
++          },
++          {
++            urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
++            handler: 'CacheFirst',
++            options: {
++              cacheName: 'map-tiles-cache',
++              expiration: { maxEntries: 150 },
++            },
++          },
++        ],
+       },
+     }),
+   ],
