@@ -1,3 +1,5 @@
+<p align="center"><img src="public/logo.png" alt="Campus en Mouvement" width="220" /></p>
+
 # Campus en Mouvement — Poitiers
 
 PWA de covoiturage entre étudiants de l'Université de Poitiers.
