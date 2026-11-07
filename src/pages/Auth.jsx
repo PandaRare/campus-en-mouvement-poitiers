@@ -53,11 +53,17 @@ export default function Auth() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6 py-10">
       <div className="mb-8">
-        <p className="text-pine-500 text-sm">Campus en Mouvement</p>
-        <h1 className="mt-1 text-3xl leading-tight font-semibold">
+        <img
+          src="/logo.png"
+          alt="Campus en Mouvement"
+          width={720}
+          height={720}
+          className="mx-auto mb-4 h-48 w-48"
+        />
+        <h1 className="text-center text-2xl leading-tight font-semibold">
           Le campus se déplace ensemble.
         </h1>
-        <p className="text-pine-700 mt-3 text-sm">
+        <p className="text-pine-700 mt-3 text-center text-sm">
           Proposez vos places libres, trouvez un trajet, partagez les frais.
         </p>
       </div>
