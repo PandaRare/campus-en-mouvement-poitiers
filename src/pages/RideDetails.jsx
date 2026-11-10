@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } from 'lucide-react'
 import AttendancePanel from '../components/AttendancePanel'
+import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import RidesMap from '../components/RidesMap'
@@ -199,13 +200,9 @@ export default function RideDetails({ session }) {
 
         <div className="mt-4 space-y-2">
           <p className="text-pine-500 text-xs">
-            {isDriver
-              ? 'Vous êtes le conducteur'
-              : `Conducteur : ${
-                  [driverProfile?.full_name, driverProfile?.study].filter(Boolean).join(' · ') ||
-                  ride.driver_id.slice(0, 4)
-                }`}
+            {isDriver ? 'Vous êtes le conducteur' : 'Conducteur'}
           </p>
+          <DriverTag profile={driverProfile} id={ride.driver_id} isMe={isDriver} />
           {driverQuery.isSuccess && (
             <ReliabilityBadge
               score={driverProfile?.reliability_score ?? 100}

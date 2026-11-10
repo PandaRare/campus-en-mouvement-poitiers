@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import PushToggle from '../components/PushToggle'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import { supabase } from '../lib/supabase'
+import { GENDERS } from '../lib/drivers'
 import { useProfile, useSaveProfile } from '../lib/queries'
 
 const inputClass =
@@ -14,6 +15,7 @@ function ProfileForm({ userId, profile }) {
   const [values, setValues] = useState({
     full_name: profile?.full_name ?? '',
     study: profile?.study ?? '',
+    gender: profile?.gender ?? 'non_precise',
   })
   const [saved, setSaved] = useState(false)
 
@@ -49,9 +51,35 @@ function ProfileForm({ userId, profile }) {
         />
       </label>
 
+      <fieldset>
+        <legend className="text-pine-700 mb-1 block text-sm">Genre (facultatif)</legend>
+        <div className="flex gap-2">
+          {GENDERS.map((g) => (
+            <label
+              key={g.value}
+              className={`flex-1 cursor-pointer rounded-xl border px-2 py-2.5 text-center text-sm ${
+                values.gender === g.value
+                  ? 'bg-pine-900 border-pine-900 text-white'
+                  : 'border-pine-100 text-pine-700 bg-white'
+              }`}
+            >
+              <input
+                type="radio"
+                name="gender"
+                value={g.value}
+                checked={values.gender === g.value}
+                onChange={() => setValues((v) => ({ ...v, gender: g.value }))}
+                className="sr-only"
+              />
+              {g.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
       <p className="text-pine-500 text-xs">
-        Ces informations sont visibles par les autres étudiants connectés (sur les trajets que
-        vous conduisez).
+        Prénom, formation et genre sont visibles par les autres étudiants connectés, sur les trajets
+        que vous conduisez.
       </p>
 
       {save.error && (

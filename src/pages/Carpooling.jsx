@@ -2,16 +2,19 @@ import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation, Repeat } from 'lucide-react'
 import AddressInput from '../components/AddressInput'
+import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
 import RecurrenceFields from '../components/RecurrenceFields'
 import RidesMap from '../components/RidesMap'
 import { HUB_PLACES } from '../constants/poitiersHubs'
 import { MAX_RECURRENCE_DAYS, addDays, emptyRecurrence } from '../lib/recurrence'
 import { distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
-import { useCreateRecurringRides, useCreateRide, useUpcomingRides } from '../lib/queries'
+import { formationOptions, normalizeText, profileMap } from '../lib/drivers'
+import { useCreateRecurringRides, useCreateRide, useProfiles, useUpcomingRides } from '../lib/queries'
 
 const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
 const NO_RIDES = []
+const NO_PROFILES = []
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'short',
@@ -52,6 +55,7 @@ export default function Carpooling({ session }) {
   const [query, setQuery] = useState('')
   const [point, setPoint] = useState(null) // lieu cherché { label, lat, lng }
   const [radius, setRadius] = useState(1000)
+  const [formation, setFormation] = useState('') // clé normalisée, '' = toutes
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [recurrence, setRecurrence] = useState(emptyRecurrence)
@@ -63,6 +67,13 @@ export default function Carpooling({ session }) {
   const mapRef = useRef(null)
 
   const userId = session.user.id
+
+  // Profils des conducteurs affichés (prénom, formation, genre)
+  const driverIds = useMemo(() => [...new Set(rides.map((r) => r.driver_id))], [rides])
+  const { data: driverProfiles = NO_PROFILES } = useProfiles(driverIds)
+  const drivers = useMemo(() => profileMap(driverProfiles), [driverProfiles])
+  const formations = useMemo(() => formationOptions(driverProfiles), [driverProfiles])
+  const activeFormation = formations.some((f) => f.key === formation) ? formation : ''
 
   function locateMe() {
     if (!navigator.geolocation) {
@@ -176,8 +187,15 @@ export default function Carpooling({ session }) {
   // Mode « adresse » : trajets dont le tracé passe à moins de `radius` mètres du point.
   // Mode « texte » : filtre sur les noms de départ / arrivée.
   const results = useMemo(() => {
+    const byFormation = (list) =>
+      activeFormation
+        ? list.filter((ride) => {
+            const study = drivers.get(ride.driver_id)?.study
+            return study && normalizeText(study) === activeFormation
+          })
+        : list
     if (pt) {
-      return rides
+      return byFormation(rides)
         .map((ride) => ({
           ...ride,
           near: hasRoute(ride) ? distanceToRoute(pt, ride.route) : Infinity,
@@ -185,12 +203,12 @@ export default function Carpooling({ session }) {
         .filter((ride) => ride.near <= radius)
     }
     const q = normalize(query)
-    if (!q) return rides
-    return rides.filter(
+    if (!q) return byFormation(rides)
+    return byFormation(rides).filter(
       (ride) =>
         normalize(ride.origin).includes(q) || normalize(ride.destination).includes(q),
     )
-  }, [rides, pt, radius, query])
+  }, [rides, pt, radius, query, activeFormation, drivers])
 
   const mapRides = useMemo(() => results.filter(hasRoute), [results])
   const selected = results.find((ride) => ride.id === selectedId) ?? null
@@ -263,6 +281,24 @@ export default function Carpooling({ session }) {
         </p>
       )}
 
+      {formations.length > 0 && (
+        <label className="mb-4 block">
+          <span className="text-pine-700 mb-1 block text-sm">Formation du conducteur</span>
+          <select
+            value={activeFormation}
+            onChange={(e) => setFormation(e.target.value)}
+            className="border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white px-3 py-2.5 outline-none"
+          >
+            <option value="">Toutes les formations</option>
+            {formations.map((f) => (
+              <option key={f.key} value={f.key}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       <div ref={mapRef} className="mb-3 scroll-mt-4">
         <RidesMap
           rides={mapRides}
@@ -291,6 +327,13 @@ export default function Carpooling({ session }) {
                   Passe à {formatDistance(selected.near)} de {point.label}
                 </p>
               )}
+              <div className="mt-1">
+                <DriverTag
+                  profile={drivers.get(selected.driver_id)}
+                  id={selected.driver_id}
+                  isMe={selected.driver_id === userId}
+                />
+              </div>
               {selected.meeting_label && (
                 <p className="text-pine-700 mt-1 flex items-start gap-1 text-sm">
                   <Flag size={14} className="text-pine-500 mt-0.5 shrink-0" />
@@ -461,15 +504,16 @@ export default function Carpooling({ session }) {
                       <span className="text-pine-500"> · à {formatDistance(ride.near)}</span>
                     )}
                   </p>
-                  {(ride.driver_id === userId || ride.recurrence_group_id) && (
+                  <div className="mt-1">
+                    <DriverTag
+                      profile={drivers.get(ride.driver_id)}
+                      id={ride.driver_id}
+                      isMe={ride.driver_id === userId}
+                    />
+                  </div>
+                  {ride.recurrence_group_id && (
                     <p className="text-pine-500 mt-1 flex items-center gap-1 text-xs">
-                      {ride.driver_id === userId && 'Vous conduisez ce trajet'}
-                      {ride.driver_id === userId && ride.recurrence_group_id && ' · '}
-                      {ride.recurrence_group_id && (
-                        <>
-                          <Repeat size={12} /> Hebdomadaire
-                        </>
-                      )}
+                      <Repeat size={12} /> Hebdomadaire
                     </p>
                   )}
                 </div>

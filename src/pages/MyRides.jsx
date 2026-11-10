@@ -1,7 +1,10 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronRight, Repeat, Users } from 'lucide-react'
+import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
-import { useMyRides } from '../lib/queries'
+import { profileMap } from '../lib/drivers'
+import { useMyRides, useProfiles } from '../lib/queries'
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   weekday: 'short',
@@ -11,7 +14,7 @@ const dateFormat = new Intl.DateTimeFormat('fr-FR', {
   minute: '2-digit',
 })
 
-function RideList({ rides, emptyLabel }) {
+function RideList({ rides, emptyLabel, drivers }) {
   if (rides.length === 0) {
     return (
       <p className="border-pine-100 text-pine-700 rounded-2xl border border-dashed p-6 text-center text-sm">
@@ -37,6 +40,11 @@ function RideList({ rides, emptyLabel }) {
                 <p className="text-pine-700 mt-1 text-sm">
                   {dateFormat.format(new Date(ride.time))}
                 </p>
+                {drivers && (
+                  <div className="mt-1">
+                    <DriverTag profile={drivers.get(ride.driver_id)} id={ride.driver_id} />
+                  </div>
+                )}
                 {ride.meeting_label && !done && (
                   <p className="text-pine-500 mt-1 truncate text-xs">RDV : {ride.meeting_label}</p>
                 )}
@@ -68,7 +76,10 @@ function RideList({ rides, emptyLabel }) {
 export default function MyRides({ session }) {
   const { data, isPending, error } = useMyRides(session.user.id)
   const driving = data?.driving ?? []
-  const joined = data?.joined ?? []
+  const joined = useMemo(() => data?.joined ?? [], [data])
+  const driverIds = useMemo(() => [...new Set(joined.map((r) => r.driver_id))], [joined])
+  const { data: driverProfiles } = useProfiles(driverIds)
+  const drivers = useMemo(() => profileMap(driverProfiles), [driverProfiles])
 
   return (
     <main className="mx-auto w-full max-w-md px-4 pt-6 pb-28">
@@ -100,6 +111,7 @@ export default function MyRides({ session }) {
             </h2>
             <RideList
               rides={joined}
+              drivers={drivers}
               emptyLabel="Vous n'avez rejoint aucun trajet pour l'instant."
             />
           </section>
