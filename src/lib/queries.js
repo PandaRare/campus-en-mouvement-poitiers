@@ -155,7 +155,7 @@ export function useCo2Rides(userId) {
 }
 
 const PROFILE_COLUMNS =
-  'id, full_name, study, completed_rides_count, total_scheduled_rides, reliability_score'
+  'id, full_name, study, gender, completed_rides_count, total_scheduled_rides, reliability_score'
 
 export function useProfile(userId) {
   return useQuery({
@@ -173,7 +173,7 @@ export function useProfiles(ids) {
     queryKey: keys.profiles(sorted),
     enabled: sorted.length > 0,
     queryFn: async () =>
-      unwrap(await supabase.from('profiles').select('id, full_name').in('id', sorted)) ?? [],
+      unwrap(await supabase.from('profiles').select('id, full_name, study, gender').in('id', sorted)) ?? [],
   })
 }
 
@@ -302,12 +302,13 @@ export function useReportAttendance(rideId) {
 export function useSaveProfile(userId) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ full_name, study }) =>
+    mutationFn: async ({ full_name, study, gender }) =>
       unwrap(
         await supabase.from('profiles').upsert({
           id: userId,
           full_name: full_name.trim() || null,
           study: study.trim() || null,
+          gender: gender || 'non_precise',
           updated_at: new Date().toISOString(),
         }),
       ),
