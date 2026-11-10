@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import PushToggle from '../components/PushToggle'
+import SupportForm from '../components/SupportForm'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import { supabase } from '../lib/supabase'
 import { GENDERS } from '../lib/drivers'
@@ -136,6 +137,8 @@ export default function Account({ session }) {
       )}
 
       <PushToggle />
+
+      <SupportForm />
 
       <dl className="border-pine-100 divide-pine-100 mt-6 divide-y rounded-2xl border bg-white px-4">
         <div className="flex items-center justify-between py-3">
