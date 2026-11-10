@@ -4,6 +4,7 @@ import PushToggle from '../components/PushToggle'
 import SupportForm from '../components/SupportForm'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import { supabase } from '../lib/supabase'
+import { DISCIPLINES, LEVELS } from '../constants/formations'
 import { GENDERS } from '../lib/drivers'
 import { useProfile, useSaveProfile } from '../lib/queries'
 
@@ -15,7 +16,8 @@ function ProfileForm({ userId, profile }) {
   const save = useSaveProfile(userId)
   const [values, setValues] = useState({
     full_name: profile?.full_name ?? '',
-    study: profile?.study ?? '',
+    level: profile?.level ?? '',
+    discipline: profile?.discipline ?? '',
     gender: profile?.gender ?? 'non_precise',
   })
   const [saved, setSaved] = useState(false)
@@ -42,14 +44,35 @@ function ProfileForm({ userId, profile }) {
       </label>
 
       <label className="block">
-        <span className="text-pine-700 mb-1 block text-sm">Licence / formation</span>
-        <input
-          value={values.study}
-          onChange={(e) => setValues((v) => ({ ...v, study: e.target.value }))}
-          maxLength={80}
-          placeholder="Ex. L3 Maths, M1 Droit, BTS…"
+        <span className="text-pine-700 mb-1 block text-sm">Niveau / statut</span>
+        <select
+          value={values.level}
+          onChange={(e) => setValues((v) => ({ ...v, level: e.target.value }))}
           className={inputClass}
-        />
+        >
+          <option value="">Non précisé</option>
+          {LEVELS.map((l) => (
+            <option key={l} value={l}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block">
+        <span className="text-pine-700 mb-1 block text-sm">Discipline</span>
+        <select
+          value={values.discipline}
+          onChange={(e) => setValues((v) => ({ ...v, discipline: e.target.value }))}
+          className={inputClass}
+        >
+          <option value="">Non précisée</option>
+          {DISCIPLINES.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
       </label>
 
       <fieldset>

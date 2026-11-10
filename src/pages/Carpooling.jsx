@@ -9,7 +9,8 @@ import RidesMap from '../components/RidesMap'
 import { HUB_PLACES } from '../constants/poitiersHubs'
 import { MAX_RECURRENCE_DAYS, addDays, emptyRecurrence } from '../lib/recurrence'
 import { distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
-import { formationOptions, normalizeText, profileMap } from '../lib/drivers'
+import { DISCIPLINES, LEVELS } from '../constants/formations'
+import { presentValues, profileMap } from '../lib/drivers'
 import { useCreateRecurringRides, useCreateRide, useProfiles, useUpcomingRides } from '../lib/queries'
 
 const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
@@ -55,7 +56,8 @@ export default function Carpooling({ session }) {
   const [query, setQuery] = useState('')
   const [point, setPoint] = useState(null) // lieu cherché { label, lat, lng }
   const [radius, setRadius] = useState(1000)
-  const [formation, setFormation] = useState('') // clé normalisée, '' = toutes
+  const [discipline, setDiscipline] = useState('') // '' = toutes
+  const [level, setLevel] = useState('') // '' = tous
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [recurrence, setRecurrence] = useState(emptyRecurrence)
@@ -72,8 +74,14 @@ export default function Carpooling({ session }) {
   const driverIds = useMemo(() => [...new Set(rides.map((r) => r.driver_id))], [rides])
   const { data: driverProfiles = NO_PROFILES } = useProfiles(driverIds)
   const drivers = useMemo(() => profileMap(driverProfiles), [driverProfiles])
-  const formations = useMemo(() => formationOptions(driverProfiles), [driverProfiles])
-  const activeFormation = formations.some((f) => f.key === formation) ? formation : ''
+  const disciplines = useMemo(
+    () => presentValues(driverProfiles, 'discipline', DISCIPLINES),
+    [driverProfiles],
+  )
+  const levels = useMemo(() => presentValues(driverProfiles, 'level', LEVELS), [driverProfiles])
+  // une valeur qui n'existe plus parmi les conducteurs est ignorée
+  const activeDiscipline = disciplines.includes(discipline) ? discipline : ''
+  const activeLevel = levels.includes(level) ? level : ''
 
   function locateMe() {
     if (!navigator.geolocation) {
@@ -188,12 +196,13 @@ export default function Carpooling({ session }) {
   // Mode « texte » : filtre sur les noms de départ / arrivée.
   const results = useMemo(() => {
     const byFormation = (list) =>
-      activeFormation
-        ? list.filter((ride) => {
-            const study = drivers.get(ride.driver_id)?.study
-            return study && normalizeText(study) === activeFormation
-          })
-        : list
+      list.filter((ride) => {
+        const d = drivers.get(ride.driver_id)
+        return (
+          (!activeDiscipline || d?.discipline === activeDiscipline) &&
+          (!activeLevel || d?.level === activeLevel)
+        )
+      })
     if (pt) {
       return byFormation(rides)
         .map((ride) => ({
@@ -208,7 +217,7 @@ export default function Carpooling({ session }) {
       (ride) =>
         normalize(ride.origin).includes(q) || normalize(ride.destination).includes(q),
     )
-  }, [rides, pt, radius, query, activeFormation, drivers])
+  }, [rides, pt, radius, query, activeDiscipline, activeLevel, drivers])
 
   const mapRides = useMemo(() => results.filter(hasRoute), [results])
   const selected = results.find((ride) => ride.id === selectedId) ?? null
@@ -281,22 +290,28 @@ export default function Carpooling({ session }) {
         </p>
       )}
 
-      {formations.length > 0 && (
-        <label className="mb-4 block">
-          <span className="text-pine-700 mb-1 block text-sm">Formation du conducteur</span>
-          <select
-            value={activeFormation}
-            onChange={(e) => setFormation(e.target.value)}
-            className="border-pine-100 focus:border-pine-500 w-full rounded-xl border bg-white px-3 py-2.5 outline-none"
-          >
-            <option value="">Toutes les formations</option>
-            {formations.map((f) => (
-              <option key={f.key} value={f.key}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-        </label>
+      {(disciplines.length > 0 || levels.length > 0) && (
+        <div className="mb-4 flex gap-2">
+          {[
+            ['Toutes disciplines', disciplines, activeDiscipline, setDiscipline, 'Discipline du conducteur'],
+            ['Tous niveaux', levels, activeLevel, setLevel, 'Niveau du conducteur'],
+          ].map(([allLabel, options, value, setValue, label]) => (
+            <select
+              key={label}
+              aria-label={label}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              className="border-pine-100 focus:border-pine-500 min-w-0 flex-1 rounded-xl border bg-white px-3 py-2.5 text-sm outline-none"
+            >
+              <option value="">{allLabel}</option>
+              {options.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ))}
+        </div>
       )}
 
       <div ref={mapRef} className="mb-3 scroll-mt-4">
