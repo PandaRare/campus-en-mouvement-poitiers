@@ -299,6 +299,14 @@ export function useReportAttendance(rideId) {
   })
 }
 
+// Demande à la modération (table support_requests ; user_id est rempli par le serveur)
+export function useSendSupportRequest() {
+  return useMutation({
+    mutationFn: async ({ category, message }) =>
+      unwrap(await supabase.from('support_requests').insert({ category, message })),
+  })
+}
+
 export function useSaveProfile(userId) {
   const qc = useQueryClient()
   return useMutation({
