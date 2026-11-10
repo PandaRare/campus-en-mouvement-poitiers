@@ -155,7 +155,7 @@ export function useCo2Rides(userId) {
 }
 
 const PROFILE_COLUMNS =
-  'id, full_name, study, gender, completed_rides_count, total_scheduled_rides, reliability_score'
+  'id, full_name, study, level, discipline, gender, completed_rides_count, total_scheduled_rides, reliability_score'
 
 export function useProfile(userId) {
   return useQuery({
@@ -173,7 +173,7 @@ export function useProfiles(ids) {
     queryKey: keys.profiles(sorted),
     enabled: sorted.length > 0,
     queryFn: async () =>
-      unwrap(await supabase.from('profiles').select('id, full_name, study, gender').in('id', sorted)) ?? [],
+      unwrap(await supabase.from('profiles').select('id, full_name, study, level, discipline, gender').in('id', sorted)) ?? [],
   })
 }
 
@@ -310,12 +310,15 @@ export function useSendSupportRequest() {
 export function useSaveProfile(userId) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ full_name, study, gender }) =>
+    mutationFn: async ({ full_name, level, discipline, gender }) =>
       unwrap(
         await supabase.from('profiles').upsert({
           id: userId,
           full_name: full_name.trim() || null,
-          study: study.trim() || null,
+          level: level || null,
+          discipline: discipline || null,
+          // texte affiché partout (« L3 · Droit ») : reste compatible avec le reste de l'application
+          study: [level, discipline].filter(Boolean).join(' · ') || null,
           gender: gender || 'non_precise',
           updated_at: new Date().toISOString(),
         }),

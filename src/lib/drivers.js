@@ -7,24 +7,11 @@ export const GENDERS = [
   { value: 'homme', label: 'Homme', Icon: Mars },
 ]
 
-// Comparaison insensible à la casse et aux accents (« l3 maths » = « L3 Maths »)
-export const normalizeText = (value) =>
-  value
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .trim()
-
-// Liste des formations présentes parmi les conducteurs : [{ key, label }], triée.
-export function formationOptions(profiles) {
-  const seen = new Map()
-  for (const p of profiles) {
-    const label = p.study?.trim()
-    if (!label) continue
-    const key = normalizeText(label)
-    if (!seen.has(key)) seen.set(key, label)
-  }
-  return [...seen].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label, 'fr'))
+// Valeurs d'un champ (level / discipline) réellement présentes chez les conducteurs,
+// dans l'ordre de la liste de référence.
+export function presentValues(profiles, field, reference) {
+  const present = new Set(profiles.map((p) => p[field]).filter(Boolean))
+  return reference.filter((value) => present.has(value))
 }
 
 export const profileMap = (profiles = []) => new Map(profiles.map((p) => [p.id, p]))
