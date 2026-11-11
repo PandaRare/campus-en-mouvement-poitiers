@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import PushToggle from '../components/PushToggle'
+import { RatingSummary } from '../components/StarRating'
 import SupportForm from '../components/SupportForm'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import { supabase } from '../lib/supabase'
@@ -144,7 +145,8 @@ export default function Account({ session }) {
       <p className="text-pine-700 mt-1 text-sm">{session.user.email}</p>
 
       {profileQuery.isSuccess && (
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <RatingSummary avg={profile?.rating_avg} count={profile?.rating_count} />
           <ReliabilityBadge
             score={profile?.reliability_score ?? 100}
             totalRides={profile?.total_scheduled_rides ?? 0}

@@ -4,6 +4,7 @@ import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } fro
 import AttendancePanel from '../components/AttendancePanel'
 import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
+import RatingPanel from '../components/RatingPanel'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
 import RidesMap from '../components/RidesMap'
 import { formatDistance, hasRoute } from '../lib/geo'
@@ -265,6 +266,7 @@ export default function RideDetails({ session }) {
       )}
 
       {canConfirm && <AttendancePanel ride={ride} isDriver={isDriver} reservations={reservations} />}
+      {canConfirm && <RatingPanel ride={ride} isDriver={isDriver} reservations={reservations} />}
 
       <section className="mt-6">
         <h2 className="mb-3 font-medium">Discussion</h2>
