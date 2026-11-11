@@ -16,6 +16,7 @@ export const keys = {
   profile: (userId) => ['profile', userId],
   profiles: (ids) => ['profiles', ...ids],
   attendance: (rideId) => ['attendance', rideId],
+  ratings: (rideId) => ['ratings', rideId],
 }
 
 // Lève l'erreur Supabase (si besoin) et renvoie les données
@@ -155,7 +156,7 @@ export function useCo2Rides(userId) {
 }
 
 const PROFILE_COLUMNS =
-  'id, full_name, study, level, discipline, gender, completed_rides_count, total_scheduled_rides, reliability_score'
+  'id, full_name, study, level, discipline, gender, rating_avg, rating_count, completed_rides_count, total_scheduled_rides, reliability_score'
 
 export function useProfile(userId) {
   return useQuery({
@@ -173,7 +174,7 @@ export function useProfiles(ids) {
     queryKey: keys.profiles(sorted),
     enabled: sorted.length > 0,
     queryFn: async () =>
-      unwrap(await supabase.from('profiles').select('id, full_name, study, level, discipline, gender').in('id', sorted)) ?? [],
+      unwrap(await supabase.from('profiles').select('id, full_name, study, level, discipline, gender, rating_avg, rating_count').in('id', sorted)) ?? [],
   })
 }
 
@@ -186,6 +187,17 @@ export function useMyAttendance(rideId, enabled) {
       unwrap(
         await supabase.from('ride_attendance').select('user_id, attended').eq('ride_id', rideId),
       ) ?? [],
+  })
+}
+
+// Mes propres notes données sur un trajet (la RLS ne renvoie que les miennes)
+export function useMyRatings(rideId, enabled) {
+  return useQuery({
+    queryKey: keys.ratings(rideId),
+    enabled,
+    queryFn: async () =>
+      unwrap(await supabase.from('ride_ratings').select('ratee_id, stars').eq('ride_id', rideId)) ??
+      [],
   })
 }
 
@@ -295,6 +307,19 @@ export function useReportAttendance(rideId) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: keys.attendance(rideId) })
       qc.invalidateQueries({ queryKey: ['profile'] }) // le score de la personne évaluée a changé
+    },
+  })
+}
+
+export function useRateUser(rideId) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ userId, stars }) =>
+      unwrap(await supabase.rpc('rate_user', { p_ride_id: rideId, p_user_id: userId, p_stars: stars })),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.ratings(rideId) })
+      qc.invalidateQueries({ queryKey: ['profile'] }) // la moyenne de la personne notée a changé
+      qc.invalidateQueries({ queryKey: ['profiles'] })
     },
   })
 }
