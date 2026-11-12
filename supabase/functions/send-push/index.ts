@@ -1,9 +1,9 @@
-// Edge Function « send-push » : envoie une notification Web Push quand
-//   · un message est posté dans le chat d'un trajet  (table messages, INSERT)
-//   · un passager rejoint un trajet                  (table reservations, INSERT)
-//   · un passager quitte un trajet                   (table reservations, DELETE)
+// Edge Function « send-push » : envoie la notification Web Push correspondant à une ligne
+// ajoutée dans la table `notifications` (les déclencheurs SQL de supabase_migration_v8.sql
+// créent ces lignes : nouveau message, passager qui rejoint ou part, trajet annulé, test).
 //
-// Elle est appelée par des Database Webhooks Supabase (voir docs/INTEGRATION_V3.md).
+// Elle est appelée par UN SEUL Database Webhook : table `notifications`, événement INSERT
+// (voir docs/INTEGRATION_V8.md). Les anciens webhooks sur messages / reservations doivent être supprimés.
 // Secrets requis : VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, WEBHOOK_SECRET
 // (SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY sont fournis automatiquement.)
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -14,20 +14,17 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
 )
 
-webpush.setVapidDetails(
-  Deno.env.get('VAPID_SUBJECT')!, // ex. mailto:vous@etu.univ-poitiers.fr
-  Deno.env.get('VAPID_PUBLIC_KEY')!,
-  Deno.env.get('VAPID_PRIVATE_KEY')!,
-)
-
 type WebhookPayload = {
   type: 'INSERT' | 'UPDATE' | 'DELETE'
   table: string
-  record: Record<string, any> | null
-  old_record: Record<string, any> | null
+  record: {
+    user_id: string
+    title: string
+    body: string
+    url: string
+    tag: string | null
+  } | null
 }
-
-type Notification = { userIds: string[]; title: string; body: string; url: string; tag: string }
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -41,66 +38,22 @@ function secretMatches(received: string | null): boolean {
   return diff === 0
 }
 
-const shorten = (text: string, max = 110) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+// La configuration VAPID est faite à chaque appel et ses erreurs sont renvoyées clairement
+// (une erreur ici au démarrage de la fonction donnerait un « 500 » muet côté webhook).
+function configureVapid(): string | null {
+  const subject = Deno.env.get('VAPID_SUBJECT') ?? ''
+  const publicKey = Deno.env.get('VAPID_PUBLIC_KEY') ?? ''
+  const privateKey = Deno.env.get('VAPID_PRIVATE_KEY') ?? ''
 
-async function displayName(userId: string, fallback: string): Promise<string> {
-  const { data } = await supabase.from('profiles').select('full_name').eq('id', userId).maybeSingle()
-  return data?.full_name || fallback
-}
-
-async function getRide(rideId: string) {
-  const { data } = await supabase
-    .from('rides')
-    .select('id, driver_id, origin, destination')
-    .eq('id', rideId)
-    .maybeSingle()
-  return data
-}
-
-// Décide qui prévenir, et avec quel texte
-async function buildNotification(payload: WebhookPayload): Promise<Notification | null> {
-  // ----- Nouveau message : tous les membres du trajet sauf l'auteur -----
-  if (payload.table === 'messages' && payload.type === 'INSERT' && payload.record) {
-    const { ride_id, user_id, text } = payload.record
-    const ride = await getRide(ride_id)
-    if (!ride) return null
-
-    const { data: passengers } = await supabase.from('reservations').select('user_id').eq('ride_id', ride_id)
-    const members = new Set<string>([ride.driver_id, ...(passengers ?? []).map((p) => p.user_id)])
-    members.delete(user_id)
-
-    const author = await displayName(
-      user_id,
-      user_id === ride.driver_id ? 'Le conducteur' : 'Un passager',
-    )
-    return {
-      userIds: [...members],
-      title: `${author} · ${ride.origin} → ${ride.destination}`,
-      body: shorten(String(text)),
-      url: `/trajets/${ride_id}`,
-      tag: `ride-${ride_id}`, // les messages d'un même trajet se remplacent au lieu de s'empiler
-    }
+  if (!publicKey || !privateKey) return 'VAPID_PUBLIC_KEY ou VAPID_PRIVATE_KEY manquant dans les secrets.'
+  if (!/^(mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/.test(subject)) {
+    return 'VAPID_SUBJECT invalide : écrivez « mailto:votre@adresse.fr » (avec « mailto: »).'
   }
-
-  // ----- Passager qui rejoint / quitte : on prévient le conducteur -----
-  if (payload.table === 'reservations' && (payload.type === 'INSERT' || payload.type === 'DELETE')) {
-    const row = payload.type === 'INSERT' ? payload.record : payload.old_record
-    if (!row) return null
-
-    const ride = await getRide(row.ride_id)
-    if (!ride) return null // trajet supprimé : les réservations partent avec lui (cascade)
-
-    const passenger = await displayName(row.user_id, 'Un passager')
-    const joined = payload.type === 'INSERT'
-    return {
-      userIds: [ride.driver_id],
-      title: joined ? 'Nouveau passager' : 'Un passager a quitté votre trajet',
-      body: `${passenger} ${joined ? 'a rejoint' : 'a quitté'} ${ride.origin} → ${ride.destination}`,
-      url: `/trajets/${ride.id}`,
-      tag: `ride-${ride.id}-passengers`,
-    }
+  try {
+    webpush.setVapidDetails(subject, publicKey, privateKey)
+  } catch (err) {
+    return `Clés VAPID refusées : ${(err as Error).message}`
   }
-
   return null
 }
 
@@ -115,45 +68,53 @@ Deno.serve(async (req) => {
     return json({ error: 'Invalid JSON' }, 400)
   }
 
-  const notification = await buildNotification(payload)
-  if (!notification || notification.userIds.length === 0) return json({ sent: 0 })
+  // Les anciens webhooks (messages, reservations) peuvent encore exister : on les ignore
+  if (payload.table !== 'notifications' || payload.type !== 'INSERT' || !payload.record) {
+    return json({ skipped: true })
+  }
+
+  const vapidError = configureVapid()
+  if (vapidError) {
+    console.error(vapidError)
+    return json({ error: vapidError }, 500)
+  }
+
+  const { user_id, title, body, url, tag } = payload.record
 
   const { data: subscriptions, error } = await supabase
     .from('push_subscriptions')
     .select('id, endpoint, p256dh, auth_key')
-    .in('user_id', notification.userIds)
+    .eq('user_id', user_id)
 
   if (error) return json({ error: error.message }, 500)
+  if (!subscriptions || subscriptions.length === 0) return json({ sent: 0, reason: 'no_subscription' })
 
-  const message = JSON.stringify({
-    title: notification.title,
-    body: notification.body,
-    url: notification.url,
-    tag: notification.tag,
-  })
+  const message = JSON.stringify({ title, body, url, tag })
 
   let sent = 0
   const expired: string[] = []
+  const failures: Array<{ status?: number; message: string }> = []
 
   await Promise.all(
-    (subscriptions ?? []).map(async (sub) => {
+    subscriptions.map(async (sub) => {
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
           message,
-          { TTL: 60 * 60 * 24 }, // un message non distribué sous 24 h est abandonné
+          { TTL: 60 * 60 * 24, urgency: 'high' }, // abandonné après 24 h ; livré sans attendre
         )
         sent++
       } catch (err) {
         // 404 / 410 : l'abonnement n'existe plus (appli désinstallée, permission retirée)
         const status = (err as { statusCode?: number }).statusCode
         if (status === 404 || status === 410) expired.push(sub.id)
-        else console.error('Échec push', status, (err as Error).message)
+        else failures.push({ status, message: (err as Error).message })
       }
     }),
   )
 
   if (expired.length > 0) await supabase.from('push_subscriptions').delete().in('id', expired)
+  for (const failure of failures) console.error('Échec push', failure.status, failure.message)
 
-  return json({ sent, removed: expired.length })
+  return json({ sent, removed: expired.length, failed: failures.length })
 })
