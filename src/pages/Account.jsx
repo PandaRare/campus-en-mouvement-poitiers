@@ -4,6 +4,7 @@ import PushToggle from '../components/PushToggle'
 import { RatingSummary } from '../components/StarRating'
 import SupportForm from '../components/SupportForm'
 import { ReliabilityBadge } from '../components/ReliabilityBadge'
+import { disablePush } from '../lib/push'
 import { supabase } from '../lib/supabase'
 import { DISCIPLINES, LEVELS } from '../constants/formations'
 import { GENDERS } from '../lib/drivers'
@@ -134,6 +135,8 @@ export default function Account({ session }) {
 
   async function signOut() {
     setBusy(true)
+    // L'appareil ne doit plus recevoir les notifications de ce compte une fois déconnecté
+    await disablePush({ forget: false }).catch(() => {})
     await supabase.auth.signOut() // le cache (mémoire + hors-ligne) est vidé dans App.jsx
     setBusy(false)
     navigate('/trajets', { replace: true })

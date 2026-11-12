@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } from 'lucide-react'
 import AttendancePanel from '../components/AttendancePanel'
@@ -14,10 +14,13 @@ import {
   useCancelSeries,
   useJoinRide,
   useLeaveRide,
+  useMarkRideNotificationsRead,
   useMessages,
   useProfile,
+  useProfiles,
   useReservations,
   useRide,
+  useRidePassengers,
   useSendMessage,
 } from '../lib/queries'
 
@@ -56,6 +59,21 @@ export default function RideDetails({ session }) {
   const driverQuery = useProfile(ride?.driver_id)
   const driverProfile = driverQuery.data
 
+  // Qui est dans le trajet : visible par le conducteur et les passagers uniquement
+  const passengersQuery = useRidePassengers(id, isMember)
+  const passengerIds = useMemo(
+    () => (passengersQuery.data ?? []).map((p) => p.user_id),
+    [passengersQuery.data],
+  )
+  const passengerProfiles = useProfiles(passengerIds)
+  const passengerById = useMemo(
+    () => new Map((passengerProfiles.data ?? []).map((p) => [p.id, p])),
+    [passengerProfiles.data],
+  )
+
+  // Ouvrir un trajet marque ses notifications (messages, passagers) comme lues
+  const { mutate: markRideRead } = useMarkRideNotificationsRead(id)
+
   const joinRide = useJoinRide()
   const leaveRide = useLeaveRide()
   const cancelRide = useCancelRide()
@@ -68,6 +86,10 @@ export default function RideDetails({ session }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'nearest' })
   }, [messages.length])
+
+  useEffect(() => {
+    if (isMember) markRideRead()
+  }, [isMember, messages.length, passengerIds.length, markRideRead])
 
   const busy =
     joinRide.isPending || leaveRide.isPending || cancelRide.isPending || cancelSeries.isPending
@@ -101,8 +123,8 @@ export default function RideDetails({ session }) {
 
   function authorLabel(message) {
     if (message.user_id === userId) return 'Vous'
-    if (message.user_id === ride?.driver_id) return 'Conducteur'
-    return `Passager ${message.user_id.slice(0, 4)}`
+    if (message.user_id === ride?.driver_id) return driverProfile?.full_name?.trim() || 'Conducteur'
+    return passengerById.get(message.user_id)?.full_name?.trim() || `Passager ${message.user_id.slice(0, 4)}`
   }
 
   if (rideQuery.isPending) {
@@ -267,6 +289,33 @@ export default function RideDetails({ session }) {
 
       {canConfirm && <AttendancePanel ride={ride} isDriver={isDriver} reservations={reservations} />}
       {canConfirm && <RatingPanel ride={ride} isDriver={isDriver} reservations={reservations} />}
+
+      {isMember && (
+        <section className="border-pine-100 mt-6 rounded-2xl border bg-white p-5">
+          <h2 className="mb-3 font-medium">
+            Passagers{' '}
+            <span className="text-pine-500">({passengersQuery.isSuccess ? passengerIds.length : '…'})</span>
+          </h2>
+          {passengersQuery.isSuccess && passengerIds.length === 0 ? (
+            <p className="text-pine-700 text-sm">
+              {isDriver ? 'Personne n’a encore rejoint ce trajet.' : 'Vous êtes le premier passager.'}
+            </p>
+          ) : (
+            <ul className="space-y-2.5">
+              {passengerIds.map((pid) => (
+                <li key={pid}>
+                  <DriverTag
+                    profile={passengerById.get(pid)}
+                    id={pid}
+                    isMe={pid === userId}
+                    fallback="Passager"
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section className="mt-6">
         <h2 className="mb-3 font-medium">Discussion</h2>
