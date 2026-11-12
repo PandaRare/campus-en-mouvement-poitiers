@@ -5,8 +5,8 @@ import { RatingSummary } from './StarRating'
 // « Qui conduit ? » : prénom / pseudo, formation et genre (si renseigné).
 //   profile : ligne de la table profiles (peut être absente : profil jamais rempli)
 //   id      : identifiant du conducteur, pour l'affichage de secours
-export default function DriverTag({ profile, id = '', isMe = false }) {
-  const name = isMe ? 'Vous' : profile?.full_name?.trim() || `Conducteur ${id.slice(0, 4)}`
+export default function DriverTag({ profile, id = '', isMe = false, fallback = 'Conducteur' }) {
+  const name = isMe ? 'Vous' : profile?.full_name?.trim() || `${fallback} ${id.slice(0, 4)}`
   const study = profile?.study?.trim()
   const gender = GENDERS.find((g) => g.value === profile?.gender && g.Icon)
 

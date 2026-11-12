@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Bell, BellOff } from 'lucide-react'
-import { disablePush, enablePush, getPushState } from '../lib/push'
+import { Bell, BellOff, Send } from 'lucide-react'
+import { disablePush, enablePush, getPushState, sendTestNotification } from '../lib/push'
 
 // Active / désactive les notifications push sur cet appareil
 export default function PushToggle() {
   const [state, setState] = useState(null) // null = vérification en cours
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [testSent, setTestSent] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -33,6 +34,20 @@ export default function PushToggle() {
     }
   }
 
+  async function sendTest() {
+    setBusy(true)
+    setError(null)
+    setTestSent(false)
+    try {
+      await sendTestNotification()
+      setTestSent(true)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (state === null) return null
 
   const hint = {
@@ -40,8 +55,8 @@ export default function PushToggle() {
       'Votre navigateur ne gère pas les notifications. Sur iPhone, installez d’abord l’application sur l’écran d’accueil.',
     unconfigured: 'Les notifications ne sont pas encore configurées sur ce site.',
     denied: 'Notifications bloquées : autorisez-les dans les réglages du navigateur, puis revenez ici.',
-    idle: 'Soyez prévenu d’un nouveau message, d’un passager ou d’un désistement, même application fermée.',
-    subscribed: 'Activées sur cet appareil.',
+    idle: 'Soyez prévenu de chaque message, d’un nouveau passager, d’un désistement ou d’une annulation, même application fermée.',
+    subscribed: 'Activées sur cet appareil : messages, nouveaux passagers, désistements et annulations.',
   }[state]
 
   const disabled = busy || ['unsupported', 'unconfigured', 'denied'].includes(state)
@@ -70,6 +85,25 @@ export default function PushToggle() {
             ? 'Désactiver les notifications'
             : 'Activer les notifications'}
       </button>
+
+      {state === 'subscribed' && (
+        <>
+          <button
+            type="button"
+            onClick={sendTest}
+            disabled={busy}
+            className="border-pine-100 text-pine-700 mt-3 flex w-full items-center justify-center gap-2 rounded-xl border py-3 text-sm disabled:opacity-50"
+          >
+            <Send size={16} /> Envoyer une notification de test
+          </button>
+          {testSent && (
+            <p className="bg-pine-100 text-pine-900 mt-3 rounded-xl px-4 py-3 text-sm" role="status">
+              Test envoyé : la notification doit arriver d’ici quelques secondes. Sinon, consultez
+              « Dépannage » dans le guide.
+            </p>
+          )}
+        </>
+      )}
     </section>
   )
 }
