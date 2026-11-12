@@ -17,6 +17,8 @@ export const keys = {
   profiles: (ids) => ['profiles', ...ids],
   attendance: (rideId) => ['attendance', rideId],
   ratings: (rideId) => ['ratings', rideId],
+  notifications: ['notifications'],
+  ridePassengers: (rideId) => ['ride-passengers', rideId],
 }
 
 // Lève l'erreur Supabase (si besoin) et renvoie les données
@@ -190,6 +192,31 @@ export function useMyAttendance(rideId, enabled) {
   })
 }
 
+// Boîte de notifications (la RLS ne renvoie que les miennes)
+export function useNotifications() {
+  return useQuery({
+    queryKey: keys.notifications,
+    queryFn: async () =>
+      unwrap(
+        await supabase
+          .from('notifications')
+          .select('id, kind, title, body, url, read_at, created_at')
+          .order('created_at', { ascending: false })
+          .limit(50),
+      ) ?? [],
+  })
+}
+
+// Passagers d'un trajet, visibles par les membres du trajet uniquement (fonction SQL ride_passengers)
+export function useRidePassengers(rideId, enabled) {
+  return useQuery({
+    queryKey: keys.ridePassengers(rideId),
+    enabled,
+    queryFn: async () =>
+      unwrap(await supabase.rpc('ride_passengers', { p_ride_id: rideId })) ?? [],
+  })
+}
+
 // Mes propres notes données sur un trajet (la RLS ne renvoie que les miennes)
 export function useMyRatings(rideId, enabled) {
   return useQuery({
@@ -311,6 +338,35 @@ export function useReportAttendance(rideId) {
   })
 }
 
+// ids = liste de notifications à marquer lues ; null = toutes les notifications non lues
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (ids) => {
+      let query = supabase.from('notifications').update({ read_at: new Date().toISOString() }).is('read_at', null)
+      if (ids) query = query.in('id', ids)
+      return unwrap(await query)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
+  })
+}
+
+// Quand on ouvre un trajet, ses notifications (messages, passagers) sont lues d'office
+export function useMarkRideNotificationsRead(rideId) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await supabase
+          .from('notifications')
+          .update({ read_at: new Date().toISOString() })
+          .is('read_at', null)
+          .eq('url', `/trajets/${rideId}`),
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.notifications }),
+  })
+}
+
 export function useRateUser(rideId) {
   const qc = useQueryClient()
   return useMutation({
@@ -378,9 +434,13 @@ export function useRealtimeSync(enabled) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, () => {
         qc.invalidateQueries({ queryKey: ['reservations'] })
+        qc.invalidateQueries({ queryKey: ['ride-passengers'] })
         qc.invalidateQueries({ queryKey: ['my-rides'] })
         qc.invalidateQueries({ queryKey: ['ride'] })
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, () =>
+        qc.invalidateQueries({ queryKey: keys.notifications }),
+      )
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) =>
         appendMessage(qc, payload.new),
       )
