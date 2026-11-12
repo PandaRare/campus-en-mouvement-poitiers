@@ -6,7 +6,7 @@ import {
   Navigate,
   NavLink,
 } from 'react-router-dom'
-import { Search, Route as RouteIcon, Leaf, User } from 'lucide-react'
+import { Bell, Search, Route as RouteIcon, Leaf, User } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import Auth from './pages/Auth'
 import Carpooling from './pages/Carpooling'
@@ -14,9 +14,11 @@ import RideDetails from './pages/RideDetails'
 import MyRides from './pages/MyRides'
 import Co2 from './pages/Co2'
 import Account from './pages/Account'
+import Notifications from './pages/Notifications'
 import InstallPrompt from './components/InstallPrompt'
 import { queryClient } from './lib/queryClient'
-import { useRealtimeSync } from './lib/queries'
+import { syncPush } from './lib/push'
+import { useNotifications, useRealtimeSync } from './lib/queries'
 
 // Vide tout ce qui appartient à l'utilisateur sorti : cache mémoire + cache hors-ligne du service worker
 function clearUserCaches() {
@@ -31,23 +33,37 @@ function clearUserCaches() {
 const NAV = [
   { to: '/trajets', label: 'Accueil', Icon: Search },
   { to: '/mes-trajets', label: 'Mes trajets', Icon: RouteIcon },
+  { to: '/notifications', label: 'Alertes', Icon: Bell, badge: true },
   { to: '/co2', label: 'CO₂', Icon: Leaf },
   { to: '/compte', label: 'Compte', Icon: User },
 ]
 
 function BottomNav() {
+  const { data: notifications } = useNotifications()
+  const unread = (notifications ?? []).filter((n) => !n.read_at).length
+
   return (
     <nav className="border-pine-100 fixed inset-x-0 bottom-0 z-20 border-t bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
       <div className="mx-auto flex w-full max-w-md">
-        {NAV.map(({ to, label, Icon }) => (
+        {NAV.map(({ to, label, Icon, badge }) => (
           <NavLink key={to} to={to} className="flex flex-1 flex-col items-center gap-1 py-2.5">
             {({ isActive }) => (
               <>
-                <Icon
-                  size={22}
-                  strokeWidth={isActive ? 2.4 : 1.8}
-                  className={isActive ? 'text-pine-900' : 'text-pine-500'}
-                />
+                <span className="relative">
+                  <Icon
+                    size={22}
+                    strokeWidth={isActive ? 2.4 : 1.8}
+                    className={isActive ? 'text-pine-900' : 'text-pine-500'}
+                  />
+                  {badge && unread > 0 && (
+                    <span
+                      className="absolute -top-1.5 -right-2.5 flex min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] leading-4 font-semibold text-white"
+                      aria-label={`${unread} notification${unread > 1 ? 's' : ''} non lue${unread > 1 ? 's' : ''}`}
+                    >
+                      {unread > 9 ? '9+' : unread}
+                    </span>
+                  )}
+                </span>
                 <span
                   className={`text-[11px] ${
                     isActive ? 'text-pine-900 font-medium' : 'text-pine-500'
@@ -83,6 +99,12 @@ export default function App() {
   // Un seul canal temps réel (trajets, réservations, messages) tant qu'on est connecté
   useRealtimeSync(Boolean(session))
 
+  // Renouvelle l'abonnement push de cet appareil si la personne l'avait activé
+  const userId = session?.user.id
+  useEffect(() => {
+    if (userId) syncPush(userId)
+  }, [userId])
+
   if (!ready) {
     return <p className="text-pine-700 p-8 text-sm">Chargement…</p>
   }
@@ -97,6 +119,7 @@ export default function App() {
         <Route path="/trajets" element={<Carpooling session={session} />} />
         <Route path="/trajets/:id" element={<RideDetails session={session} />} />
         <Route path="/mes-trajets" element={<MyRides session={session} />} />
+        <Route path="/notifications" element={<Notifications />} />
         <Route path="/co2" element={<Co2 session={session} />} />
         <Route path="/compte" element={<Account session={session} />} />
         <Route path="*" element={<Navigate to="/trajets" replace />} />
