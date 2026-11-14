@@ -22,6 +22,9 @@ import {
 
 const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
 const NO_RIDES = []
+
+// « près de », « à ≈ 500 m » : la base arrondit la distance à 250 m
+const passLabel = (near) => (near < 50 ? 'tout près' : `à ≈ ${formatDistance(near)}`)
 const NO_PROFILES = []
 
 const dateFormat = new Intl.DateTimeFormat('fr-FR', {
@@ -122,6 +125,7 @@ export default function Carpooling({ session }) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setError(null)
+        setSelectedId(null)
         setPoint({ label: 'Ma position', lat: pos.coords.latitude, lng: pos.coords.longitude })
         setQuery('Ma position')
       },
@@ -221,7 +225,10 @@ export default function Carpooling({ session }) {
   const setField = (key) => (value) => setForm((f) => ({ ...f, [key]: value }))
 
   const mapRides = useMemo(() => results.filter(hasRoute), [results])
-  const selected = results.find((ride) => ride.id === selectedId) ?? null
+  // Un seul trajet passe près de l'adresse cherchée : sa fiche s'ouvre d'office (false = fermée à la main)
+  const selected =
+    results.find((ride) => ride.id === selectedId) ??
+    (point && selectedId !== false && results.length === 1 ? results[0] : null)
 
   function showOnMap(id) {
     setSelectedId(id)
@@ -245,7 +252,11 @@ export default function Carpooling({ session }) {
             value={query}
             onChange={setQuery}
             selected={point}
-            onSelect={setPoint}
+            onSelect={(place) => {
+              setError(null)
+              setSelectedId(null)
+              setPoint(place)
+            }}
             LeftIcon={Search}
             shortcuts={HUB_PLACES}
             ariaLabel="Rechercher une adresse ou une ville"
@@ -319,12 +330,19 @@ export default function Carpooling({ session }) {
         <RidesMap
           rides={mapRides}
           selectedId={selected?.id ?? null}
-          onSelect={setSelectedId}
+          onSelect={(id) => setSelectedId(id ?? false)}
           point={pt}
           radius={point ? radius : null}
           height={300}
         />
       </div>
+
+      {point && results.length > 0 && (
+        <p className="text-pine-500 mb-3 text-center text-xs">
+          Les positions sur la carte sont approximatives (≈ 1 km) pour protéger les conducteurs. Le calcul
+          « passe près de vous » utilise le vrai parcours.
+        </p>
+      )}
 
       {selected ? (
         <section className="border-pine-100 mb-6 rounded-2xl border bg-white p-4">
@@ -338,9 +356,9 @@ export default function Carpooling({ session }) {
                 {selected.seats > 1 ? 's' : ''}
                 {selected.distance_m ? ` · ${formatDistance(selected.distance_m)}` : ''}
               </p>
-              {selected.near != null && selected.near !== Infinity && (
-                <p className="text-pine-500 mt-1 text-xs">
-                  Passe à {formatDistance(selected.near)} de {point.label}
+              {point && selected.near != null && selected.near !== Infinity && (
+                <p className="text-pine-900 mt-1 text-sm font-medium">
+                  Passe {passLabel(selected.near)} de {point.label}
                 </p>
               )}
               <div className="mt-1">
@@ -359,7 +377,7 @@ export default function Carpooling({ session }) {
             </div>
             <button
               type="button"
-              onClick={() => setSelectedId(null)}
+              onClick={() => setSelectedId(false)}
               aria-label="Fermer"
               className="text-pine-500 p-1"
             >
@@ -496,6 +514,18 @@ export default function Carpooling({ session }) {
           )}
         </h2>
 
+        {point && !loading && results.length > 0 && (
+          <p className="bg-pine-100 text-pine-900 mb-3 rounded-xl px-4 py-3 text-sm">
+            <strong>
+              {results.length}
+              {hasMore ? '+' : ''} trajet{results.length > 1 ? 's' : ''}
+            </strong>{' '}
+            {results.length > 1 ? 'passent' : 'passe'} à moins de{' '}
+            {radius < 1000 ? `${radius} m` : `${radius / 1000} km`} de <strong>{point.label}</strong> : vous
+            pouvez les rejoindre en route, même s’ils ne partent pas d’ici.
+          </p>
+        )}
+
         {loading && <p className="text-pine-700 text-sm">Chargement des trajets…</p>}
 
         {!loading && results.length === 0 && (
@@ -528,10 +558,12 @@ export default function Carpooling({ session }) {
                   </p>
                   <p className="text-pine-700 mt-1 text-sm">
                     {dateFormat.format(new Date(ride.time))}
-                    {ride.near != null && ride.near !== Infinity && (
-                      <span className="text-pine-500"> · à {formatDistance(ride.near)}</span>
-                    )}
                   </p>
+                  {point && ride.near != null && ride.near !== Infinity && (
+                    <p className="bg-pine-100 text-pine-900 mt-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium">
+                      <Navigation size={12} /> Passe {passLabel(ride.near)} de vous
+                    </p>
+                  )}
                   <div className="mt-1">
                     <DriverTag
                       profile={drivers.get(ride.driver_id)}
