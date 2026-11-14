@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Repeat } from 'lucide-react'
+import { ArrowLeft, Users, Clock, MapPin, Send, LogOut, Flag, Leaf, Lock, Repeat } from 'lucide-react'
 import AttendancePanel from '../components/AttendancePanel'
 import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
@@ -182,9 +182,17 @@ export default function RideDetails({ session }) {
             <Clock size={16} className="text-pine-500" />
             {dateFormat.format(departure)}
           </li>
-          <li className="flex items-center gap-2">
-            <MapPin size={16} className="text-pine-500" />
-            Départ : {ride.origin}
+          <li className="flex items-start gap-2">
+            <MapPin size={16} className="text-pine-500 mt-0.5 shrink-0" />
+            <span>
+              Départ : {ride.origin_address ?? ride.origin}
+              {ride.destination_address && (
+                <>
+                  <br />
+                  Arrivée : {ride.destination_address}
+                </>
+              )}
+            </span>
           </li>
           <li className="flex items-center gap-2">
             <Users size={16} className="text-pine-500" />
@@ -192,6 +200,12 @@ export default function RideDetails({ session }) {
             {ride.seats > 1 ? 's' : ''}
             {isDriver && ` · ${reservations.length} passager${reservations.length > 1 ? 's' : ''}`}
           </li>
+          {!isMember && !isPast && (
+            <li className="flex items-start gap-2">
+              <Lock size={16} className="text-pine-500 mt-0.5 shrink-0" />
+              Adresses exactes et point de rendez-vous communiqués une fois le trajet rejoint.
+            </li>
+          )}
           {ride.meeting_label && (
             <li className="flex items-start gap-2">
               <Flag size={16} className="text-pine-500 mt-0.5 shrink-0" />

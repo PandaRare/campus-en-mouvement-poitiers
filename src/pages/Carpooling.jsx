@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Navigation, Repeat } from 'lucide-react'
+import { Search, ChevronRight, Users, MapPin, LocateFixed, X, Flag, Lock, Navigation, Repeat } from 'lucide-react'
 import AddressInput from '../components/AddressInput'
 import DriverTag from '../components/DriverTag'
 import OfflineNotice from '../components/OfflineNotice'
@@ -8,10 +8,17 @@ import RecurrenceFields from '../components/RecurrenceFields'
 import RidesMap from '../components/RidesMap'
 import { HUB_PLACES } from '../constants/poitiersHubs'
 import { MAX_RECURRENCE_DAYS, addDays, emptyRecurrence } from '../lib/recurrence'
-import { distanceToRoute, fetchRoute, formatDistance, hasRoute } from '../lib/geo'
+import { fetchRoute, formatDistance, hasRoute } from '../lib/geo'
 import { DISCIPLINES, LEVELS } from '../constants/formations'
 import { presentValues, profileMap } from '../lib/drivers'
-import { useCreateRecurringRides, useCreateRide, useProfiles, useUpcomingRides } from '../lib/queries'
+import {
+  RIDES_PAGE_SIZE,
+  useCreateRecurringRides,
+  useCreateRide,
+  useProfiles,
+  useRideFilterOptions,
+  useRideSearch,
+} from '../lib/queries'
 
 const RADIUS_OPTIONS = [500, 1000, 2000, 5000]
 const NO_RIDES = []
@@ -36,20 +43,21 @@ const emptyForm = {
   seats: 2,
 }
 
-// Comparaison insensible à la casse et aux accents
-const normalize = (value) =>
-  value
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .trim()
+// Valeur qui ne suit la saisie qu'après une courte pause (évite une recherche par touche tapée)
+function useDebounced(value, delay = 350) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
 
 // Heure LOCALE pour <input type="datetime-local" min=…> (toISOString donnerait l'heure UTC)
 const localNowForInput = () =>
   new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 
 export default function Carpooling({ session }) {
-  const { data: rides = NO_RIDES, isPending: loading, error: loadError } = useUpcomingRides()
   const createRide = useCreateRide()
   const createRecurring = useCreateRecurringRides()
 
@@ -58,6 +66,7 @@ export default function Carpooling({ session }) {
   const [radius, setRadius] = useState(1000)
   const [discipline, setDiscipline] = useState('') // '' = toutes
   const [level, setLevel] = useState('') // '' = tous
+  const [pageState, setPageState] = useState({ sig: '', limit: RIDES_PAGE_SIZE })
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [recurrence, setRecurrence] = useState(emptyRecurrence)
@@ -70,18 +79,40 @@ export default function Carpooling({ session }) {
 
   const userId = session.user.id
 
-  // Profils des conducteurs affichés (prénom, formation, genre)
-  const driverIds = useMemo(() => [...new Set(rides.map((r) => r.driver_id))], [rides])
-  const { data: driverProfiles = NO_PROFILES } = useProfiles(driverIds)
-  const drivers = useMemo(() => profileMap(driverProfiles), [driverProfiles])
-  const disciplines = useMemo(
-    () => presentValues(driverProfiles, 'discipline', DISCIPLINES),
-    [driverProfiles],
-  )
-  const levels = useMemo(() => presentValues(driverProfiles, 'level', LEVELS), [driverProfiles])
+  const pt = useMemo(() => (point ? [point.lat, point.lng] : null), [point])
+
+  // Menus de formation : seulement celles des conducteurs de trajets à venir (la base les fournit)
+  const { data: filterOptions = NO_PROFILES } = useRideFilterOptions()
+  const disciplines = useMemo(() => presentValues(filterOptions, 'discipline', DISCIPLINES), [filterOptions])
+  const levels = useMemo(() => presentValues(filterOptions, 'level', LEVELS), [filterOptions])
   // une valeur qui n'existe plus parmi les conducteurs est ignorée
   const activeDiscipline = disciplines.includes(discipline) ? discipline : ''
   const activeLevel = levels.includes(level) ? level : ''
+
+  // La recherche est faite par la base. Texte : zones de départ / d'arrivée ; adresse choisie :
+  // trajets dont le tracé passe à moins de `radius` mètres.
+  const debouncedQuery = useDebounced(query)
+  // « Voir plus » agrandit la page ; tout changement de recherche ou de filtre repart de la première page
+  const filterSig = JSON.stringify([point ? '' : debouncedQuery, pt, radius, activeDiscipline, activeLevel])
+  const limit = pageState.sig === filterSig ? pageState.limit : RIDES_PAGE_SIZE
+  const search = useRideSearch({
+    query: point ? '' : debouncedQuery,
+    point: pt,
+    radius,
+    discipline: activeDiscipline,
+    level: activeLevel,
+    limit,
+  })
+  const results = search.data?.rides ?? NO_RIDES
+  const hasMore = search.data?.hasMore ?? false
+  const loading = search.isPending
+  const loadError = search.error
+
+  // Profils des conducteurs affichés (prénom, formation, genre)
+  const rides = results
+  const driverIds = useMemo(() => [...new Set(rides.map((r) => r.driver_id))], [rides])
+  const { data: driverProfiles = NO_PROFILES } = useProfiles(driverIds)
+  const drivers = useMemo(() => profileMap(driverProfiles), [driverProfiles])
 
   function locateMe() {
     if (!navigator.geolocation) {
@@ -160,20 +191,19 @@ export default function Carpooling({ session }) {
         setNotice(`${count} trajet${count > 1 ? 's' : ''} publié${count > 1 ? 's' : ''}.`)
       } else {
         await createRide.mutateAsync({
-          driver_id: userId,
-          origin: o.label,
-          destination: d.label,
-          time: new Date(form.time).toISOString(),
-          seats: Number(form.seats),
-          origin_lat: o.lat,
-          origin_lng: o.lng,
-          dest_lat: d.lat,
-          dest_lng: d.lng,
-          meeting_label: m ? m.label : null,
-          meeting_lat: m ? m.lat : null,
-          meeting_lng: m ? m.lng : null,
-          route,
-          distance_m,
+          p_origin: o.label,
+          p_destination: d.label,
+          p_time: new Date(form.time).toISOString(),
+          p_seats: Number(form.seats),
+          p_origin_lat: o.lat,
+          p_origin_lng: o.lng,
+          p_dest_lat: d.lat,
+          p_dest_lng: d.lng,
+          p_meeting_label: m ? m.label : null,
+          p_meeting_lat: m ? m.lat : null,
+          p_meeting_lng: m ? m.lng : null,
+          p_distance_m: distance_m,
+          p_route: route,
         })
         setNotice('Trajet publié.')
       }
@@ -189,35 +219,6 @@ export default function Carpooling({ session }) {
   }
 
   const setField = (key) => (value) => setForm((f) => ({ ...f, [key]: value }))
-
-  const pt = useMemo(() => (point ? [point.lat, point.lng] : null), [point])
-
-  // Mode « adresse » : trajets dont le tracé passe à moins de `radius` mètres du point.
-  // Mode « texte » : filtre sur les noms de départ / arrivée.
-  const results = useMemo(() => {
-    const byFormation = (list) =>
-      list.filter((ride) => {
-        const d = drivers.get(ride.driver_id)
-        return (
-          (!activeDiscipline || d?.discipline === activeDiscipline) &&
-          (!activeLevel || d?.level === activeLevel)
-        )
-      })
-    if (pt) {
-      return byFormation(rides)
-        .map((ride) => ({
-          ...ride,
-          near: hasRoute(ride) ? distanceToRoute(pt, ride.route) : Infinity,
-        }))
-        .filter((ride) => ride.near <= radius)
-    }
-    const q = normalize(query)
-    if (!q) return byFormation(rides)
-    return byFormation(rides).filter(
-      (ride) =>
-        normalize(ride.origin).includes(q) || normalize(ride.destination).includes(q),
-    )
-  }, [rides, pt, radius, query, activeDiscipline, activeLevel, drivers])
 
   const mapRides = useMemo(() => results.filter(hasRoute), [results])
   const selected = results.find((ride) => ride.id === selectedId) ?? null
@@ -396,6 +397,11 @@ export default function Carpooling({ session }) {
 
         {showForm && (
           <form onSubmit={publishRide} className="mt-4 space-y-3">
+            <p className="text-pine-500 flex items-start gap-1.5 text-xs">
+              <Lock size={13} className="mt-0.5 shrink-0" />
+              Votre adresse exacte et le point de rendez-vous ne sont visibles que par vos
+              passagers. Les autres étudiants voient seulement la zone (ex. « Poitiers »).
+            </p>
             <AddressInput
               required
               value={form.origin}
@@ -482,7 +488,12 @@ export default function Carpooling({ session }) {
       <section>
         <h2 className="mb-3 font-medium">
           À venir{' '}
-          {!loading && <span className="text-pine-500">({results.length})</span>}
+          {!loading && (
+            <span className="text-pine-500">
+              ({results.length}
+              {hasMore ? '+' : ''})
+            </span>
+          )}
         </h2>
 
         {loading && <p className="text-pine-700 text-sm">Chargement des trajets…</p>}
@@ -493,7 +504,9 @@ export default function Carpooling({ session }) {
               ? `Aucun trajet ne passe à moins de ${radius < 1000 ? `${radius} m` : `${radius / 1000} km`} de cette adresse. Élargissez le rayon.`
               : query
                 ? `Aucun trajet ne correspond à « ${query} ». Essayez une autre ville.`
-                : 'Aucun trajet pour le moment. Publiez le premier.'}
+                : activeDiscipline || activeLevel
+                  ? 'Aucun trajet pour cette formation. Retirez un filtre.'
+                  : 'Aucun trajet pour le moment. Publiez le premier.'}
           </p>
         )}
 
@@ -552,6 +565,17 @@ export default function Carpooling({ session }) {
             </li>
           ))}
         </ul>
+
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => setPageState({ sig: filterSig, limit: limit + RIDES_PAGE_SIZE })}
+            disabled={search.isFetching}
+            className="border-pine-100 text-pine-700 mt-4 w-full rounded-xl border bg-white py-3 text-sm font-medium disabled:opacity-50"
+          >
+            {search.isFetching ? 'Chargement…' : 'Voir plus de trajets'}
+          </button>
+        )}
       </section>
     </main>
   )
