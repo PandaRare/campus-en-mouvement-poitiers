@@ -1,7 +1,7 @@
 // Toutes les requêtes Supabase de l'application, en hooks TanStack Query.
 // Les pages ne parlent plus directement à Supabase : elles utilisent ces hooks.
 import { useEffect } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from './supabase'
 
 // ------------------------------------------------------------
@@ -29,6 +29,30 @@ function unwrap({ data, error }) {
 
 const byTime = (a, b) => new Date(a.time) - new Date(b.time)
 
+// Les adresses exactes, le point de rendez-vous et le tracé précis sont dans la table ride_private,
+// lisible seulement par le conducteur et les passagers (la base renvoie `null` aux autres).
+// Pour eux, on garde la zone publique (ride.origin / ride.destination) et on ajoute le détail exact.
+const RIDE_WITH_PRIVATE = '*, ride_private(*)'
+
+function withPrivate(row) {
+  if (!row) return row
+  const { ride_private: p, ...ride } = row
+  if (!p) return ride
+  return {
+    ...ride,
+    origin_address: p.origin_address,
+    destination_address: p.destination_address,
+    origin_lat: p.origin_lat,
+    origin_lng: p.origin_lng,
+    dest_lat: p.dest_lat,
+    dest_lng: p.dest_lng,
+    meeting_label: p.meeting_label,
+    meeting_lat: p.meeting_lat,
+    meeting_lng: p.meeting_lng,
+    route: p.route ?? ride.route,
+  }
+}
+
 // ------------------------------------------------------------
 // Lectures
 // ------------------------------------------------------------
@@ -47,25 +71,75 @@ const onlyUpcoming = (rows) => {
   return rows.filter((ride) => new Date(ride.time).getTime() >= now)
 }
 
-export function useUpcomingRides() {
+export const RIDES_PAGE_SIZE = 20
+
+// Recherche de trajets à venir, faite par la base (fonction SQL search_rides) :
+//   query = texte (zones de départ / d'arrivée), point + radius = trajets dont le tracé passe près
+//   du point, discipline / level = formation du conducteur, limit = nombre de trajets demandés.
+// Sans aucun filtre, une simple lecture de la table (GET) est utilisée : c'est elle que le cache
+// hors-ligne retient (les appels de fonctions ne sont pas mis en cache).
+// Renvoie { rides, hasMore } : hasMore = il y a probablement d'autres trajets (bouton « Voir plus »).
+export function useRideSearch({ query = '', point = null, radius = 1000, discipline = '', level = '', limit = RIDES_PAGE_SIZE }) {
+  const filtered = Boolean(query.trim() || point || discipline || level)
+  const args = {
+    query: query.trim(),
+    lat: point ? Number(point[0].toFixed(5)) : null,
+    lng: point ? Number(point[1].toFixed(5)) : null,
+    radius: point ? radius : null,
+    discipline,
+    level,
+    limit,
+  }
+
   return useQuery({
-    queryKey: keys.rides,
-    queryFn: async () =>
-      unwrap(
-        await supabase
-          .from('rides')
-          .select('*')
-          .gte('time', startOfToday())
-          .order('time', { ascending: true }),
-      ) ?? [],
-    select: onlyUpcoming,
+    queryKey: [...keys.rides, 'search', args],
+    placeholderData: keepPreviousData, // l'ancienne liste reste affichée pendant le rechargement
+    queryFn: async () => {
+      if (!filtered) {
+        const rows =
+          unwrap(
+            await supabase
+              .from('rides')
+              .select('*')
+              .gte('time', startOfToday())
+              .order('time', { ascending: true })
+              .limit(limit),
+          ) ?? []
+        return { rides: onlyUpcoming(rows), hasMore: rows.length >= limit }
+      }
+
+      const rows =
+        unwrap(
+          await supabase.rpc('search_rides', {
+            p_query: args.query || null,
+            p_lat: args.lat,
+            p_lng: args.lng,
+            p_radius_m: args.radius,
+            p_discipline: discipline || null,
+            p_level: level || null,
+            p_limit: limit,
+            p_offset: 0,
+          }),
+        ) ?? []
+      return { rides: rows.map((r) => ({ ...r, near: r.near_m })), hasMore: rows.length >= limit }
+    },
+  })
+}
+
+// Formations présentes chez les conducteurs de trajets à venir (menus de filtre)
+export function useRideFilterOptions() {
+  return useQuery({
+    queryKey: ['ride-filter-options'],
+    staleTime: 60_000,
+    queryFn: async () => unwrap(await supabase.rpc('ride_filter_options')) ?? [],
   })
 }
 
 export function useRide(id) {
   return useQuery({
     queryKey: keys.ride(id),
-    queryFn: async () => unwrap(await supabase.from('rides').select('*').eq('id', id).maybeSingle()),
+    queryFn: async () =>
+      withPrivate(unwrap(await supabase.from('rides').select(RIDE_WITH_PRIVATE).eq('id', id).maybeSingle())),
   })
 }
 
@@ -106,20 +180,20 @@ export function useMyRides(userId) {
       const [driven, booked] = await Promise.all([
         supabase
           .from('rides')
-          .select('*')
+          .select(RIDE_WITH_PRIVATE)
           .eq('driver_id', userId)
           .order('time', { ascending: true }),
         supabase
           .from('reservations')
-          .select('id, created_at, rides (*)')
+          .select('id, created_at, rides (*, ride_private(*))')
           .eq('user_id', userId)
           .order('created_at', { ascending: false }),
       ])
       if (driven.error) throw driven.error
       if (booked.error) throw booked.error
       return {
-        driving: driven.data ?? [],
-        joined: (booked.data ?? []).map((row) => row.rides).filter(Boolean).sort(byTime),
+        driving: (driven.data ?? []).map(withPrivate),
+        joined: (booked.data ?? []).map((row) => withPrivate(row.rides)).filter(Boolean).sort(byTime),
       }
     },
   })
@@ -244,7 +318,8 @@ function refreshAfterRideChange(qc, rideId) {
 export function useCreateRide() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (ride) => unwrap(await supabase.from('rides').insert(ride)),
+    // Création par fonction serveur : l'adresse exacte reste privée, la position publique est arrondie
+    mutationFn: async (args) => unwrap(await supabase.rpc('create_ride', args)),
     onSuccess: () => refreshAfterRideChange(qc),
   })
 }
