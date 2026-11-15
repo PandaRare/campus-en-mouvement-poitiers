@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Polyline, Marker, Circle, Tooltip, useMap } fr
 import L from 'leaflet'
 import { CAMPUS } from '../lib/geo'
 
-// Fond de carte CARTO « Voyager » (données © OpenStreetMap) : plus lisible que le fond OSM standard
+// Fond de carte OpenStreetMap (serveurs a, b, c uniquement)
 const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
@@ -32,6 +32,26 @@ function FitTo({ boundsKey }) {
     if (points.length === 1) map.setView(points[0], 15)
     else map.fitBounds(points, { padding: [28, 28], maxZoom: 16 })
   }, [map, boundsKey])
+  return null
+}
+
+// Recalcule la taille quand le conteneur change (carte affichée après coup, rotation du téléphone…)
+// sinon Leaflet ne charge qu'une partie des tuiles et laisse des carrés gris
+function KeepSize() {
+  const map = useMap()
+  useEffect(() => {
+    const el = map.getContainer()
+    const refresh = () => map.invalidateSize()
+    const t = setTimeout(refresh, 150)
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(refresh) : null
+    ro?.observe(el)
+    window.addEventListener('orientationchange', refresh)
+    return () => {
+      clearTimeout(t)
+      ro?.disconnect()
+      window.removeEventListener('orientationchange', refresh)
+    }
+  }, [map])
   return null
 }
 
@@ -77,7 +97,8 @@ export default function RidesMap({
       scrollWheelZoom={false}
       style={{ height }}
     >
-      <TileLayer url={TILE_URL} attribution={ATTRIBUTION} subdomains="abcd" maxZoom={19} />
+      <TileLayer url={TILE_URL} attribution={ATTRIBUTION} subdomains="abc" maxZoom={19} />
+      <KeepSize />
       <FitTo boundsKey={boundsKey} />
 
       {ordered.map((ride) => {
