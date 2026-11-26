@@ -24,7 +24,7 @@ import { useNotifications, useRealtimeSync } from './lib/queries'
 function clearUserCaches() {
   queryClient.clear()
   try {
-    caches.delete('supabase-cache')
+    caches.delete('supabase-cache').catch(() => {})
   } catch {
     /* Cache API indisponible : sans conséquence */
   }
@@ -85,10 +85,11 @@ export default function App() {
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setReady(true)
-    })
+    supabase.auth
+      .getSession()
+      .then(({ data }) => setSession(data.session))
+      .catch(() => setSession(null)) // erreur au démarrage : on affiche la connexion plutôt que de rester bloqué
+      .finally(() => setReady(true))
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       if (event === 'SIGNED_OUT') clearUserCaches()
       setSession(next)
