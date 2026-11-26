@@ -7,5 +7,6 @@ export const emptyRecurrence = { enabled: false, days: [1, 2, 3, 4, 5], endDate:
 export function addDays(isoDate, n) {
   const d = new Date(`${isoDate}T12:00:00`)
   d.setDate(d.getDate() + n)
-  return d.toISOString().slice(0, 10)
+  const pad = (v) => String(v).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
